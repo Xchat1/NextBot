@@ -1,0 +1,9 @@
+[
+  {
+    "testId": "export-check",
+    "label": "空数据导出回归验证",
+    "image": "REPLACE_WITH_DIGEST_PINNED_IMAGE@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "args": ["/bin/sh", "/workspace/tests/export_check.sh"],
+    "timeoutSeconds": 60
+  }
+]
