@@ -1,4 +1,4 @@
-import { Activity, ArrowUpRight, Check, ChevronRight, Circle, CircleAlert, Clock3, Code2, FileText, GitBranch, Layers3, ListChecks, LoaderCircle, MessageCircle, ShieldCheck, X } from 'lucide-react'
+import { ArrowUpRight, Check, ChevronRight, Circle, CircleAlert, Clock3, Code2, FileText, GitBranch, Layers3, ListChecks, LoaderCircle, MessageCircle, ShieldCheck, X } from 'lucide-react'
 import { useEffect, useRef, type ReactNode } from 'react'
 import type { Task, TaskState } from './api'
 
@@ -70,5 +70,4 @@ export function TaskRow({ task, project, label }: { task: Task; project?: string
 export function RequestGlyph({ kind }: { kind: string }) {
   return kind === 'action_approval' ? <ShieldCheck size={18} /> : kind === 'user_question' ? <MessageCircle size={18} /> : <ArrowUpRight size={18} />
 }
-export const MetricIcons = [ListChecks, Activity, CircleAlert, Check]
 export function Dot() { return <Circle size={8} fill="currentColor" /> }

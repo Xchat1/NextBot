@@ -3,8 +3,8 @@ import { useState, type FormEvent } from 'react'
 import { get, mutate, type Resolution, type Session, type Snapshot, type Task } from './api'
 import { Notice } from './ui'
 
-export function TaskForm({ task, session, snapshot, online, refresh }: { task?: Task; session: Session; snapshot: Snapshot; online: boolean; refresh: () => Promise<void> }) {
-  const [projectId, setProject] = useState(task?.projectId || snapshot.projects[0]?.projectId || '')
+export function TaskForm({ task, initialProjectId, session, snapshot, online, refresh }: { task?: Task; initialProjectId?: string; session: Session; snapshot: Snapshot; online: boolean; refresh: () => Promise<void> }) {
+  const [projectId, setProject] = useState(task?.projectId || initialProjectId || snapshot.projects[0]?.projectId || '')
   const [title, setTitle] = useState(task?.title ?? '')
   const [goal, setGoal] = useState(task?.goal ?? '')
   const [scope, setScope] = useState(task?.scope ?? '')

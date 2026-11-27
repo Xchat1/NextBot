@@ -37,6 +37,7 @@ private final class NextBotApp: NSObject, NSApplicationDelegate, WKNavigationDel
     private var logURL: URL { dataDirectory.appendingPathComponent("NextBot.log") }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.appearance = NSAppearance(named: .darkAqua)
         NSApp.mainMenu = makeMenu()
         window.title = "NextBot"
         window.minSize = NSSize(width: 760, height: 540)

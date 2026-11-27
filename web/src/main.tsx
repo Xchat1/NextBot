@@ -1,17 +1,19 @@
 import { ArrowRight, Bell, ChevronRight, Command, Download, GitBranch, Laptop, LayoutDashboard, Monitor, Plus, Search, Server, Settings, ShieldCheck, Smartphone, Workflow } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { APIError, followEvents, get, mutate, replay, snapshot, type Device, type List, type Session, type Snapshot, type Task } from './api'
 import { TaskDetails } from './details'
 import { TaskForm } from './form'
-import { agentName, Brand, date, Dot, Empty, Loading, MetricIcons, Modal, Notice, RequestGlyph, TaskRow } from './ui'
+import { agentName, Brand, date, Dot, Empty, Loading, Modal, Notice, RequestGlyph, TaskRow } from './ui'
+import { WorkspaceTree } from './workspace'
 import './style.css'
 
 const desktopClient = (window as Window & { nextBotDesktop?: boolean }).nextBotDesktop === true
+const pageTitles: Record<string, string> = { settings: '设置', inbox: '待我处理', new: '新建任务', edit: '编辑草稿', task: '任务详情', project: '仓库工作区' }
 
 function currentRoute() {
   const value = location.hash.slice(1)
-  return /^(new|settings|inbox|task\/[a-f0-9]{32}|edit\/[a-f0-9]{32})$/.test(value) ? value : ''
+  return /^(settings|inbox|new|(?:new|project|task|edit)\/[a-f0-9]{32})$/.test(value) ? value : ''
 }
 function takeTicket() {
   const params = new URLSearchParams(location.hash.slice(1))
@@ -30,9 +32,14 @@ function App() {
   const [error, setError] = useState('')
   const [initKey, setInitKey] = useState(0)
   const refreshData = useRef<() => Promise<void>>(async () => {})
+  const scrollArea = useRef<HTMLElement>(null)
 
   useEffect(() => {
-    const listener = () => { setRoute(currentRoute()); window.scrollTo(0, 0) }
+    const listener = () => {
+      setRoute(currentRoute())
+      scrollArea.current?.scrollTo(0, 0)
+      window.scrollTo(0, 0)
+    }
     window.addEventListener('hashchange', listener)
     return () => window.removeEventListener('hashchange', listener)
   }, [])
@@ -174,20 +181,23 @@ function App() {
   const tasks = snapshotState?.tasks ?? []
   const pending = snapshotState?.pendingRequests ?? []
   const approvals = tasks.filter(task => task.state === 'awaiting_acceptance')
-  const inboxCount = pending.length + approvals.length
+  const manual = tasks.filter(task => task.state !== 'awaiting_acceptance' && task.blockers.some(blocker => blocker.kind === 'awaiting_input' && blocker.message))
+  const inboxCount = pending.length + approvals.length + manual.length
   const nodeOnline = snapshotState?.nodes.some(node => node.availability === 'online') ?? false
-  const taskID = route.split('/')[1]
-  const activeTask = tasks.find(task => task.taskId === taskID)
-  const heading = route === 'settings' ? '设置' : route === 'inbox' ? '待我处理' : route === 'new' ? '新建任务' : route.startsWith('edit/') ? '编辑草稿' : route.startsWith('task/') ? '任务详情' : '任务总览'
+  const [page, id] = route.split('/')
+  const activeTask = page === 'task' || page === 'edit' ? tasks.find(task => task.taskId === id) : undefined
+  const project = snapshotState?.projects.find(item => item.projectId === (page === 'project' || page === 'new' ? id : activeTask?.projectId))
+  const heading = pageTitles[page] ?? '任务总览'
+  const newTask = '#new' + (project ? '/' + project.projectId : '')
   return <div className="shell">
     <aside className="sidebar">
       <a className="home-link" href="#" aria-label="NextBot 任务总览"><Brand /></a>
-      <div className="sidebar-caption">工作区</div>
-      <nav aria-label="主导航">
-        <a className={!route || route.startsWith('task/') || route.startsWith('edit/') ? 'active' : ''} href="#"><LayoutDashboard size={18} /> <span>任务总览</span></a>
-        <a className={route === 'inbox' ? 'active' : ''} href="#inbox"><Bell size={18} /> <span>待我处理</span>{inboxCount > 0 && <b className="nav-count">{inboxCount}</b>}</a>
-        <a className={route === 'settings' ? 'active' : ''} href="#settings"><Settings size={18} /> <span>设置</span></a>
+      <nav className="primary-nav" aria-label="主导航">
+        <a aria-current={!route ? 'page' : undefined} href="#"><LayoutDashboard size={16} /> <span>任务总览</span></a>
+        <a aria-current={route === 'inbox' ? 'page' : undefined} href="#inbox"><Bell size={16} /> <span>待我处理</span>{inboxCount > 0 && <b className="nav-count">{inboxCount}</b>}</a>
+        <a aria-current={route === 'settings' ? 'page' : undefined} href="#settings"><Settings size={16} /> <span>设置</span></a>
       </nav>
+      {snapshotState && <WorkspaceTree projects={snapshotState.projects} tasks={tasks} route={route} projectId={project?.projectId} />}
       <div className="host-card">
         <div className="host-icon"><Server size={17} /></div>
         <div><strong>本地执行节点</strong><span><i className={nodeOnline ? 'up' : ''} />{nodeOnline ? '节点在线' : '节点离线'}</span></div>
@@ -197,20 +207,19 @@ function App() {
     <div className="main-shell">
       <header className="topbar">
         <a className="mobile-brand" href="#" aria-label="NextBot 任务总览"><Brand /></a>
-        <div className="breadcrumbs"><span>控制台</span><ChevronRight size={14} /><strong>{heading}</strong></div>
+        <div className="breadcrumbs"><a href={project ? '#project/' + project.projectId : '#'}>{project?.name ?? '工作区'}</a><ChevronRight size={14} /><strong>{heading}</strong></div>
         <div className="topbar-actions">
           <span className={online ? 'sync online' : 'sync'}><Dot />{online ? '实时同步' : '正在连接'}</span>
-          <a href="#inbox" className="icon-button top-bell" aria-label="待我处理"><Bell size={18} />{inboxCount > 0 && <i />}</a>
-          <a href="#settings" className="avatar" aria-label="设备设置">{session.deviceId.slice(0, 2).toUpperCase()}</a>
+          {page !== 'new' && page !== 'edit' && <a href={newTask} className="button primary top-new"><Plus size={16} /> 新建任务</a>}
         </div>
       </header>
-      <main className="content" id="main-content">
+      <main className="content" id="main-content" ref={scrollArea}>
         {error && <Notice danger>{error}</Notice>}
         {!snapshotState ? <Loading /> : route === 'settings' ? <SettingsPage session={session} snapshot={snapshotState} refresh={refresh} signOut={() => { setSession(null); setSnapshotData(undefined) }} />
-          : route === 'new' || route.startsWith('edit/') ? <TaskForm key={taskID || 'new'} task={activeTask} snapshot={snapshotState} session={session} online={online} refresh={refresh} />
-          : route.startsWith('task/') ? <TaskDetails key={taskID} taskId={taskID} task={activeTask} projects={snapshotState.projects} session={session} online={online} refresh={refresh} sequence={snapshotState.highWater} />
-          : route === 'inbox' ? <Inbox tasks={tasks} pending={pending} approvals={approvals} />
-          : <Dashboard snapshot={snapshotState} inboxCount={inboxCount} />}
+          : page === 'new' || page === 'edit' ? <TaskForm key={route} task={activeTask} initialProjectId={project?.projectId} snapshot={snapshotState} session={session} online={online} refresh={refresh} />
+          : page === 'task' ? <TaskDetails key={id} taskId={id} task={activeTask} projects={snapshotState.projects} session={session} online={online} refresh={refresh} sequence={snapshotState.highWater} />
+          : page === 'inbox' ? <Inbox tasks={tasks} pending={pending} approvals={approvals} manual={manual} />
+          : <Dashboard key={route} snapshot={snapshotState} project={project} pending={pending} approvals={approvals} manual={manual} />}
       </main>
     </div>
   </div>
@@ -260,39 +269,71 @@ function Bind({ ticket, onSuccess, error, onRetry }: { ticket: { value: string; 
   </div>
 }
 
-function Dashboard({ snapshot, inboxCount }: { snapshot: Snapshot; inboxCount: number }) {
+type Attention = { pending: Snapshot['pendingRequests']; approvals: Task[]; manual: Task[] }
+
+function Dashboard({ snapshot, project, pending, approvals, manual }: Attention & { snapshot: Snapshot; project?: Snapshot['projects'][number] }) {
   const [filter, setFilter] = useState('all')
   const [search, setSearch] = useState('')
-  const { tasks, projects } = snapshot
-  const running = tasks.filter(task => ['queued', 'running', 'awaiting_review', 'reviewing'].includes(task.state)).length
-  const done = tasks.filter(task => task.state === 'completed').length
-  const needsOwner = new Set([...snapshot.pendingRequests.map(req => req.taskId), ...tasks.filter(task => task.state === 'awaiting_acceptance' || task.blockers.some(blocker => blocker.message && blocker.kind === 'awaiting_input')).map(task => task.taskId)])
-  const filtered = useMemo(() => {
-    const term = search.toLocaleLowerCase().trim()
-    return tasks.filter(task => {
-      const matches = filter === 'all' || (filter === 'todo' && needsOwner.has(task.taskId)) || (filter === 'draft' && task.state === 'draft') || (filter === 'finished' && ['completed', 'cancelled', 'failed'].includes(task.state))
-      return matches && (!term || [task.title, task.goal, projects.find(project => project.projectId === task.projectId)?.name ?? ''].some(text => text.toLocaleLowerCase().includes(term)))
-    }).sort((a, b) => Number(needsOwner.has(b.taskId)) - Number(needsOwner.has(a.taskId)))
-  }, [tasks, projects, filter, search, needsOwner])
-  const metrics = [['全部任务', tasks.length], ['执行与复核', running], ['待我处理', inboxCount], ['已完成', done]]
-  return <>
-    <div className="page-heading"><div><h1>任务总览</h1><p>查看执行进度，处理授权并验收产物。</p></div><a className="button primary" href="#new"><Plus size={18} /> 新建任务</a></div>
-    <section className="metrics" aria-label="任务统计">
-      {metrics.map(([label, number], index) => { const Icon = MetricIcons[index]; return <div className={'metric metric-' + index} key={label}><span className="metric-icon"><Icon size={18} /></span><div><strong>{number}</strong><span>{label}</span></div></div> })}
-    </section>
-    <section className="panel task-panel">
-      <div className="panel-heading"><div><h2>任务列表</h2><span>{filtered.length} 项任务</span></div><label className="search"><Search size={16} /><input aria-label="搜索任务" value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索任务…" /></label></div>
-      <div className="tabs" aria-label="筛选任务">
-        {[['all', '全部'], ['todo', '待我处理'], ['draft', '草稿'], ['finished', '已结束']].map(([key, text]) => <button key={key} className={filter === key ? 'selected' : ''} onClick={() => setFilter(key)}>{text}</button>)}
-      </div>
-      {filtered.length > 0 ? <div className="task-list">{filtered.map(task => <TaskRow key={task.taskId} task={task} project={projects.find(project => project.projectId === task.projectId)?.name} />)}</div>
-        : <Empty title={tasks.length > 0 ? '没有匹配的任务' : '还没有任务'}>{tasks.length === 0 && <><p>选择仓库和基准提交，创建你的第一项任务。</p><a className="button secondary" href="#new"><Plus size={16} /> 新建任务</a></>}</Empty>}
-    </section>
-  </>
+  const projectNames = new Map(snapshot.projects.map(item => [item.projectId, item.name]))
+  const tasks = snapshot.tasks.filter(task => !project || task.projectId === project.projectId)
+  const needsOwner = new Set([...pending, ...approvals, ...manual].map(item => item.taskId))
+  const views = [
+    { id: 'all', title: '全部', tasks },
+    { id: 'running', title: '进行中', tasks: tasks.filter(task => ['queued', 'running', 'awaiting_review', 'reviewing'].includes(task.state)) },
+    { id: 'todo', title: '待处理', tasks: tasks.filter(task => needsOwner.has(task.taskId)) },
+    { id: 'draft', title: '草稿', tasks: tasks.filter(task => task.state === 'draft') },
+    { id: 'finished', title: '已结束', tasks: tasks.filter(task => ['completed', 'cancelled', 'failed'].includes(task.state)) },
+  ]
+  const term = search.toLocaleLowerCase().trim()
+  const filtered = (views.find(item => item.id === filter)?.tasks ?? tasks).filter(task =>
+    !term || [task.title, task.goal, projectNames.get(task.projectId) ?? ''].some(value => value.toLocaleLowerCase().includes(term)),
+  )
+  const newTask = '#new' + (project ? '/' + project.projectId : '')
+  return <div className="page-layout">
+    <div className="page-heading"><div><h1>{project?.name ?? '任务总览'}</h1><p>{project ? '仓库工作区' : '所有仓库'} · {tasks.length} 项任务</p></div>
+      <a className="button primary mobile-new" href={newTask}><Plus size={16} /> 新建任务</a>
+    </div>
+    <div className="workbench dashboard-workbench">
+      <section className="panel task-panel" aria-label="任务列表">
+        <div className="queue-tools">
+          <div className="tabs" aria-label="筛选任务">
+            {views.map(view => <button type="button" key={view.id} className={filter === view.id ? 'selected' : ''} aria-pressed={filter === view.id} onClick={() => setFilter(view.id)}>{view.title}<span>{view.tasks.length}</span></button>)}
+          </div>
+          <div className="queue-search">
+            {snapshot.projects.length > 1 && <select className="queue-project" aria-label="筛选仓库" value={project?.projectId ?? ''} onChange={event => { location.hash = event.target.value ? 'project/' + event.target.value : '' }}>
+              <option value="">所有仓库</option>
+              {snapshot.projects.map(item => <option value={item.projectId} key={item.projectId}>{item.name}</option>)}
+            </select>}
+            <label className="search"><Search size={15} /><input aria-label="搜索任务" value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索任务…" /></label>
+          </div>
+        </div>
+        {filtered.length > 0 ? <div className="task-list">{filtered.map(task => <TaskRow key={task.taskId} task={task} project={projectNames.get(task.projectId)} />)}</div>
+          : <Empty title={tasks.length > 0 ? '没有匹配的任务' : '还没有任务'}>{tasks.length === 0 && <a className="button secondary" href={snapshot.projects.length ? newTask : '#settings'}>{snapshot.projects.length ? '创建第一项任务' : '查看仓库登记方式'}</a>}</Empty>}
+      </section>
+      <AttentionPanel tasks={snapshot.tasks} pending={pending} approvals={approvals} manual={manual} />
+    </div>
+  </div>
 }
 
-function Inbox({ tasks, pending, approvals }: { tasks: Task[]; pending: Snapshot['pendingRequests']; approvals: Task[] }) {
-  const manual = tasks.filter(task => task.state !== 'awaiting_acceptance' && task.blockers.some(blocker => blocker.kind === 'awaiting_input' && blocker.message))
+function AttentionPanel({ tasks, pending, approvals, manual }: Attention & { tasks: Task[] }) {
+  const waiting = pending.length + approvals.length + manual.length
+  const taskTitles = new Map(tasks.map(task => [task.taskId, task.title]))
+  const entries = [
+    ...pending.map(request => ({ key: request.requestId, taskId: request.taskId, title: taskTitles.get(request.taskId), detail: request.kind === 'action_approval' ? '测试授权' : '等待答复' })),
+    ...approvals.map(task => ({ key: task.taskId, taskId: task.taskId, title: task.title, detail: '版本待验收' })),
+    ...manual.map(task => ({ key: task.taskId, taskId: task.taskId, title: task.title, detail: '需要核对或恢复' })),
+  ]
+  return <aside className="panel inspector attention-panel" aria-labelledby="attention-title">
+    <div className="inspector-title"><Bell size={16} /><h2 id="attention-title">待我处理</h2>{waiting > 0 && <span>{waiting}</span>}</div>
+    {waiting === 0 ? <p className="inspector-empty">当前没有待办</p> :
+      <ul>{entries.slice(0, 5).map(item => <li key={item.key}>
+        <a href={'#task/' + item.taskId}><div><strong>{item.title || '未命名任务'}</strong><span>{item.detail}</span></div><ChevronRight size={14} /></a>
+      </li>)}</ul>}
+    {waiting > 0 && <a className="inspector-link" href="#inbox">打开待办 <ChevronRight size={14} /></a>}
+  </aside>
+}
+
+function Inbox({ tasks, pending, approvals, manual }: Attention & { tasks: Task[] }) {
   return <>
     <div className="page-heading"><div><h1>待我处理</h1><p>处理 Agent 的请求、待核对事项和版本验收。</p></div></div>
     <section className="panel inbox-panel">

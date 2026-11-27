@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, ClipboardList, Clock3, Download, FileCode2, GitBranch, History, Layers3, Play, RotateCcw, Square, Workflow } from 'lucide-react'
+import { ArrowLeft, Check, ClipboardList, Clock3, Download, FileCode2, GitBranch, History, Layers3, PanelRight, Play, RotateCcw, Square, Workflow } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { APIError, apiPath, get, getText, mutate, type Artifact, type Attempt, type Entry, type List, type OwnerRequest, type Project, type Session, type Task, type TimelineEvent } from './api'
 import { agentName, date, Empty, eventNames, Loading, Modal, Notice, RequestGlyph, results, short, Status, blockerLabels } from './ui'
@@ -103,9 +103,10 @@ export function TaskDetails({ taskId, task, sequence, projects, session, online,
     {attempt?.recoveryOptions.includes('new_attempt') && !ended && <div className="detail-link-row"><button className="button secondary" disabled={locked} onClick={() => void doAction(async () => {
       await mutate('tasks/' + taskId + '/recover', { attemptId: attempt.attemptId, expectedRevision: current.revision, choice: 'new_attempt', evidenceRefs: [] }, session)
     })}><Play size={16} /> 开启新尝试</button></div>}
-    <section className="panel details-panel">
+    <div className="workbench detail-workbench">
+    <section className="panel details-panel" aria-label="任务内容">
       <div className="tabs detail-tabs" aria-label="任务内容">
-        {sections.map(([id, name]) => <button className={id === section ? 'selected' : ''} key={id} onClick={() => setSection(id)}>{name}</button>)}
+        {sections.map(([id, name]) => <button type="button" aria-pressed={id === section} className={id === section ? 'selected' : ''} key={id} onClick={() => setSection(id)}>{name}</button>)}
       </div>
       {section === 'overview' && <div className="overview">
         <div className="requirements">
@@ -114,13 +115,6 @@ export function TaskDetails({ taskId, task, sequence, projects, session, online,
           <Info title="验收条件">{current.acceptanceCriteria || '未填写'}</Info>
           {current.feedback && <Info title="返工原因">{current.feedback}</Info>}
         </div>
-        <div className="detail-facts">
-          <Info title="基准提交"><code>{short(current.baseCommit)}</code></Info>
-          <Info title="当前尝试">{attempt ? '#' + attempt.ordinal + ' · ' + (results[attempt.status] ?? attempt.status) : '—'}</Info>
-          <Info title="返工轮数">{current.reworkCount} / 2</Info>
-          {current.sourceTaskId && <Info title="来源任务"><a href={'#task/' + current.sourceTaskId}>{short(current.sourceTaskId)}</a></Info>}
-          {lastAcceptance && <Info title="最近验收">{results[String(lastAcceptance.data?.outcome)]} · 设备 {short(String(lastAcceptance.data?.deviceId ?? ''))} · {date(lastAcceptance.occurredAt)}</Info>}
-        </div>
         {requests.filter(req => req.status !== 'pending').length > 0 && <div className="request-history">
           <h3>请求记录</h3>
           {requests.filter(req => req.status !== 'pending').map(req => <div className="settings-item" key={req.requestId}>
@@ -128,7 +122,7 @@ export function TaskDetails({ taskId, task, sequence, projects, session, online,
           </div>)}
         </div>}
       </div>}
-      {section === 'artifact' && (selected ? <ArtifactView artifact={selected} options={data?.artifacts ?? []} select={setArtifact} /> : <Empty title="尚无归档产物" icon={<Layers3 size={23} />} />)}
+      {section === 'artifact' && (selected ? <ArtifactView key={selected.artifactVersionId} artifact={selected} options={data?.artifacts ?? []} select={setArtifact} /> : <Empty title="尚无归档产物" icon={<Layers3 size={23} />} />)}
       {section === 'timeline' && (data ? <div className="timeline">
         {data.timeline.items.slice().reverse().map(event => <div className="timeline-item" key={event.seq}><div className="timeline-icon"><History size={15} /></div><div><strong>{eventNames[event.type] ?? event.type}</strong><span>{[event.data?.outcome && (results[String(event.data.outcome)] ?? String(event.data.outcome)), event.data?.phase && (results[String(event.data.phase)] ?? String(event.data.phase)), event.data?.deviceId && '设备 ' + short(String(event.data.deviceId)), event.data?.artifactVersionId && '版本 ' + short(String(event.data.artifactVersionId))].filter(Boolean).join(' · ')}</span></div><time>{date(event.occurredAt)}</time></div>)}
         {data.timeline.nextCursor && <button className="button secondary" onClick={() => void get<List<TimelineEvent>>('tasks/' + taskId + '/timeline?cursor=' + data.timeline.nextCursor).then(page => setData({ ...data, timeline: { items: [...data.timeline.items, ...page.items], nextCursor: page.nextCursor } })).catch(err => setError(err.message))}>加载更多记录</button>}
@@ -137,6 +131,17 @@ export function TaskDetails({ taskId, task, sequence, projects, session, online,
         {data.attempts.slice().reverse().map(item => <div className="settings-item" key={item.attemptId}><Workflow size={19} /><div><strong>尝试 #{item.ordinal} · {agentName(item.agent)} {item.role === 'review' ? '复核' : '执行'}</strong><span>{date(item.startedAt)}{item.endedAt ? ' – ' + date(item.endedAt) : ''} · {short(item.attemptId)}</span>{item.nativeSessionId && <span>原生会话 {short(item.nativeSessionId)}</span>}{item.result && <span>{results[item.result] ?? item.result}</span>}</div><span className="mini">{results[item.status] ?? item.status}</span></div>)}
       </div> : <Empty title="尚无执行或复核尝试" icon={<Clock3 size={23} />} />)}
     </section>
+    <aside className="panel inspector" aria-labelledby="task-context-title">
+      <div className="inspector-title"><PanelRight size={16} /><h2 id="task-context-title">任务上下文</h2></div>
+      <div className="detail-facts">
+        <Info title="基准提交"><code title={current.baseCommit}>{short(current.baseCommit)}</code></Info>
+        <Info title="当前尝试">{attempt ? '#' + attempt.ordinal + ' · ' + (results[attempt.status] ?? attempt.status) : '—'}</Info>
+        <Info title="返工轮数">{current.reworkCount} / 2</Info>
+        {current.sourceTaskId && <Info title="来源任务"><a href={'#task/' + current.sourceTaskId}>{short(current.sourceTaskId)}</a></Info>}
+        {lastAcceptance && <Info title="最近验收">{results[String(lastAcceptance.data?.outcome)]} · 设备 {short(String(lastAcceptance.data?.deviceId ?? ''))} · {date(lastAcceptance.occurredAt)}</Info>}
+      </div>
+    </aside>
+    </div>
     {dialog && <Modal title={dialog === 'cancel' ? '取消任务' : dialog === 'accept' ? '接受 v' + dialogTarget?.version : '要求返工'} onClose={() => setDialog(undefined)}>
       {dialog === 'accept' ? <p>确认你已核对 v{dialogTarget?.version} 的证据。接受后此任务将记录为已完成。</p> : <label>{dialog === 'cancel' ? '取消原因（可选）' : '返工原因'}<textarea rows={3} value={reason} onChange={e => setReason(e.target.value)} placeholder={dialog === 'rework' ? '说明需要补充的证据或修改' : '记录取消缘由'} /></label>}
       {dialogStale && <Notice>任务已有更新，请返回并查看当前状态。</Notice>}
@@ -174,7 +179,7 @@ function ArtifactView({ artifact, options, select }: { artifact: Artifact; optio
   const [text, setText] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const selected = entry && artifact.manifest.find(item => item.entryId === entry.entryId)
+  const selected = artifact.manifest.find(item => item.entryId === entry?.entryId) ?? artifact.manifest.find(item => item.evidenceKind === 'diff') ?? artifact.manifest[0]
   const path = selected ? 'artifacts/' + artifact.artifactVersionId + '/entries/' + selected.entryId : ''
   useEffect(() => {
     if (!path) return
@@ -185,11 +190,13 @@ function ArtifactView({ artifact, options, select }: { artifact: Artifact; optio
   }, [path])
   return <div className="artifact-view">
     <div className="artifact-top"><div><div className="artifact-label"><GitBranch size={17} /><h3>归档版本</h3></div><code>{artifact.baseCommit}</code></div>
-      <select aria-label="归档版本" value={artifact.artifactVersionId} onChange={event => { setEntry(undefined); select(event.target.value) }}>{options.map(item => <option value={item.artifactVersionId} key={item.artifactVersionId}>v{item.versionNumber}</option>)}</select></div>
+      <select aria-label="归档版本" value={artifact.artifactVersionId} onChange={event => select(event.target.value)}>{options.map(item => <option value={item.artifactVersionId} key={item.artifactVersionId}>v{item.versionNumber}</option>)}</select></div>
     {artifact.integrityStatus !== 'available' && <Notice danger>归档条目缺失或校验失败。该版本暂时无法接受。</Notice>}
     {artifact.review && <div className="review-note"><strong>{results[artifact.review.outcome] ?? artifact.review.outcome}</strong><span>{artifact.review.reason}</span>{artifact.review.evidenceRefs?.length ? <small>证据 · {artifact.review.evidenceRefs.join('、')}</small> : null}</div>}
     {artifact.acceptance && <div className="review-note"><strong>{results[artifact.acceptance.outcome] ?? artifact.acceptance.outcome} · {date(artifact.acceptance.decidedAt)}</strong><span>设备 {short(artifact.acceptance.deviceId)}</span>{artifact.acceptance.reason && <span>{artifact.acceptance.reason}</span>}</div>}
-    <div className="artifact-entries">{artifact.manifest.map(item => <button type="button" key={item.entryId} className={'entry-button' + (item.entryId === selected?.entryId ? ' active' : '')} onClick={() => setEntry(item)}><FileCode2 size={17} /><span><strong>{evidenceKinds[item.evidenceKind] ?? item.entryId}</strong><small>{item.entryId} · {item.size.toLocaleString()} B</small></span></button>)}</div>
-    {selected && <div className="evidence"><div><strong>{selected.entryId}</strong><a className="button quiet" href={apiPath(path)} download={selected.entryId}><Download size={16} /> 下载</a></div>{loading ? <Loading /> : error ? <Notice danger>{error}</Notice> : <pre>{text || '该条目没有内容'}</pre>}</div>}
+    <div className="artifact-body">
+      <div className="artifact-entries">{artifact.manifest.map(item => <button type="button" key={item.entryId} className={'entry-button' + (item.entryId === selected?.entryId ? ' active' : '')} aria-pressed={item.entryId === selected?.entryId} onClick={() => setEntry(item)}><FileCode2 size={16} /><span><strong>{evidenceKinds[item.evidenceKind] ?? item.entryId}</strong><small>{item.entryId} · {item.size.toLocaleString()} B</small></span></button>)}</div>
+      {selected && <div className="evidence"><div><strong>{selected.entryId}</strong><a className="button quiet" href={apiPath(path)} download={selected.entryId}><Download size={16} /> 下载</a></div>{loading ? <Loading /> : error ? <Notice danger>{error}</Notice> : <pre>{text || '该条目没有内容'}</pre>}</div>}
+    </div>
   </div>
 }
