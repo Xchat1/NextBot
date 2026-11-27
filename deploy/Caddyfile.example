@@ -1,0 +1,10 @@
+{
+	auto_https disable_redirects
+	skip_install_trust
+}
+
+{$NEXTBOT_HOST} {
+	bind {$NEXTBOT_PRIVATE_IP}
+	tls internal
+	reverse_proxy 127.0.0.1:{$NEXTBOT_UPSTREAM_PORT}
+}

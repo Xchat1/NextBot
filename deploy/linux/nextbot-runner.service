@@ -1,0 +1,18 @@
+[Unit]
+Description=NextBot Runner
+Requires=nextbot-control.service
+After=nextbot-control.service
+PartOf=nextbot-control.service
+
+[Service]
+Type=simple
+UMask=0077
+StateDirectory=nextbot
+StateDirectoryMode=0700
+Environment="PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin"
+Environment=NEXTBOT_MANAGED_TESTS=false NEXTBOT_CONTAINER_ENGINE=podman
+EnvironmentFile=%h/.config/nextbot/nextbot.env
+ExecStart=%h/.local/bin/nextbot runner --data %S/nextbot/runner --socket %t/nextbot/runner.sock --codex-home ${NEXTBOT_CODEX_HOME} --verified-codex-version ${NEXTBOT_CODEX_VERSION} --claude-home ${NEXTBOT_CLAUDE_HOME} --verified-claude-version ${NEXTBOT_CLAUDE_VERSION} --container-engine ${NEXTBOT_CONTAINER_ENGINE} --enable-managed-tests=${NEXTBOT_MANAGED_TESTS}
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=45s
