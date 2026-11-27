@@ -8,7 +8,12 @@ import { agentName, Brand, date, Dot, Empty, Loading, Modal, Notice, RequestGlyp
 import { WorkspaceTree } from './workspace'
 import './style.css'
 
-const desktopClient = (window as Window & { nextBotDesktop?: boolean }).nextBotDesktop === true
+const nativeWindow = window as Window & {
+  nextBotDesktop?: boolean
+  webkit?: { messageHandlers?: { nextBotRepository?: { postMessage: (action: string) => void } } }
+}
+const desktopClient = nativeWindow.nextBotDesktop === true
+const addLocalRepository = () => nativeWindow.webkit?.messageHandlers?.nextBotRepository?.postMessage('pick')
 const pageTitles: Record<string, string> = { settings: '设置', inbox: '待我处理', new: '新建任务', edit: '编辑草稿', task: '任务详情', project: '仓库工作区' }
 
 function currentRoute() {
@@ -96,6 +101,7 @@ function App() {
       if (ms >= 0) timer = window.setTimeout(done, ms)
     })
     const onOffline = () => {
+      if (desktopClient) return
       setOnline(false)
       attemptController?.abort(new DOMException('Network offline', 'AbortError'))
     }
@@ -112,7 +118,7 @@ function App() {
     document.addEventListener('visibilitychange', onVisibility)
     void (async () => {
       while (!root.signal.aborted) {
-        if (!navigator.onLine) {
+        if (!desktopClient && !navigator.onLine) {
           setOnline(false)
           await wait(-1)
           continue
@@ -146,7 +152,7 @@ function App() {
           )
         } catch (err) {
           if (root.signal.aborted) return
-          const intentional = attemptController.signal.aborted && (!navigator.onLine || (err instanceof DOMException && err.name === 'AbortError'))
+          const intentional = attemptController.signal.aborted && ((!desktopClient && !navigator.onLine) || (err instanceof DOMException && err.name === 'AbortError'))
           if (err instanceof APIError && err.status === 410) position = undefined
           else if (!intentional) fail(err)
           if (err instanceof APIError && err.status === 401) return
@@ -155,7 +161,7 @@ function App() {
           attemptController = undefined
         }
         setOnline(false)
-        if (!root.signal.aborted && navigator.onLine) await wait(1200)
+        if (!root.signal.aborted && (desktopClient || navigator.onLine)) await wait(1200)
       }
     })()
     return () => {
@@ -308,7 +314,10 @@ function Dashboard({ snapshot, project, pending, approvals, manual }: Attention 
           </div>
         </div>
         {filtered.length > 0 ? <div className="task-list">{filtered.map(task => <TaskRow key={task.taskId} task={task} project={projectNames.get(task.projectId)} />)}</div>
-          : <Empty title={tasks.length > 0 ? '没有匹配的任务' : '还没有任务'}>{tasks.length === 0 && <a className="button secondary" href={snapshot.projects.length ? newTask : '#settings'}>{snapshot.projects.length ? '创建第一项任务' : '查看仓库登记方式'}</a>}</Empty>}
+          : <Empty title={tasks.length > 0 ? '没有匹配的任务' : '还没有任务'}>{tasks.length === 0 && (snapshot.projects.length > 0
+            ? <a className="button secondary" href={newTask}>创建第一项任务</a>
+            : desktopClient ? <button type="button" className="button secondary" onClick={addLocalRepository}>添加本机仓库</button>
+              : <a className="button secondary" href="#settings">查看仓库登记方式</a>)}</Empty>}
       </section>
       <AttentionPanel tasks={snapshot.tasks} pending={pending} approvals={approvals} manual={manual} />
     </div>
@@ -381,8 +390,10 @@ function SettingsPage({ session, snapshot, refresh, signOut }: { session: Sessio
       </div>)}
     </section>
     <section className="panel">
-      <div className="panel-heading"><div><h2>登记仓库</h2><span>由安装主机管理仓库与受管测试</span></div><GitBranch size={20} /></div>
-      {snapshot.projects.length === 0 ? <Empty title="尚未登记仓库"><code>nextbot project-add --repo /path/to/repo</code></Empty> : <div className="settings-body">{snapshot.projects.map(project => <div className="settings-item" key={project.projectId}><GitBranch size={18} /><div><strong>{project.name}</strong><span>{project.tests?.length ?? 0} 项登记测试</span></div></div>)}</div>}
+      <div className="panel-heading"><div><h2>登记仓库</h2><span>由安装主机管理仓库与受管测试</span></div>{desktopClient
+        ? <button type="button" className="button secondary" onClick={addLocalRepository}><Plus size={16} /> 添加本机仓库</button>
+        : <GitBranch size={20} />}</div>
+      {snapshot.projects.length === 0 ? <Empty title="尚未登记仓库">{!desktopClient && <code>nextbot project-add --repo /path/to/repo</code>}</Empty> : <div className="settings-body">{snapshot.projects.map(project => <div className="settings-item" key={project.projectId}><GitBranch size={18} /><div><strong>{project.name}</strong><span>{project.tests?.length ?? 0} 项登记测试</span></div></div>)}</div>}
     </section>
     <section className="panel">
       <div className="panel-heading"><div><h2>可信设备</h2><span>{pairingOrigin ? '撤销设备后，现有会话将失效。' : '在 Mac 工具栏的「手机接手」中设置私网 HTTPS 地址后，即可配对手机。'}</span></div>{pairingOrigin && <button className="button secondary" disabled={busy} onClick={() => void action(async () => { setCopied(false); setPair(await mutate('pairings', {}, session)) })}><Plus size={17} /> 配对设备</button>}</div>

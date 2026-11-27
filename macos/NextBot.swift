@@ -7,7 +7,7 @@ private struct LocalEndpoint: Decodable {
 }
 
 @MainActor
-private final class NextBotApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, NSToolbarDelegate {
+private final class NextBotApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler, NSToolbarDelegate {
     private let defaults = UserDefaults.standard
     private let fileManager = FileManager.default
     private let window = NSWindow(
@@ -35,6 +35,18 @@ private final class NextBotApp: NSObject, NSApplicationDelegate, WKNavigationDel
     }
 
     private var logURL: URL { dataDirectory.appendingPathComponent("NextBot.log") }
+    private var bundledCodexVersion: String {
+        #if arch(arm64)
+        return Bundle.main.object(forInfoDictionaryKey: "NextBotVerifiedCodexVersion") as? String ?? ""
+        #else
+        return ""
+        #endif
+    }
+
+    private var codexVersion: String {
+        let version = defaults.string(forKey: "codexVersion")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return version.isEmpty ? bundledCodexVersion : version
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.appearance = NSAppearance(named: .darkAqua)
@@ -51,6 +63,7 @@ private final class NextBotApp: NSObject, NSApplicationDelegate, WKNavigationDel
         webView.configuration.userContentController.addUserScript(
             WKUserScript(source: "window.nextBotDesktop = true", injectionTime: .atDocumentStart, forMainFrameOnly: true)
         )
+        webView.configuration.userContentController.add(self, name: "nextBotRepository")
         if #available(macOS 13.3, *) {
             webView.isInspectable = ProcessInfo.processInfo.environment["NEXTBOT_MACOS_INSPECT"] == "1"
         }
@@ -161,7 +174,7 @@ private final class NextBotApp: NSObject, NSApplicationDelegate, WKNavigationDel
                 "desktop", "--data", dataDirectory.path,
                 "--parent-pid", String(ProcessInfo.processInfo.processIdentifier),
                 "--codex-home", defaults.string(forKey: "codexHome") ?? "",
-                "--verified-codex-version", defaults.string(forKey: "codexVersion") ?? "",
+                "--verified-codex-version", codexVersion,
                 "--claude-home", defaults.string(forKey: "claudeHome") ?? "",
                 "--verified-claude-version", defaults.string(forKey: "claudeVersion") ?? "",
                 "--phone-origin", defaults.string(forKey: "phoneOrigin") ?? ""
@@ -289,6 +302,13 @@ private final class NextBotApp: NSObject, NSApplicationDelegate, WKNavigationDel
         }
     }
 
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "nextBotRepository", message.body as? String == "pick", message.frameInfo.isMainFrame,
+              let origin = endpoint?.origin, let source = message.frameInfo.request.url,
+              source.scheme == origin.scheme, source.host == origin.host, source.port == origin.port else { return }
+        addRepository()
+    }
+
     @objc private func recoverOwner() {
         guard let endpoint else { return }
         let alert = NSAlert()
@@ -307,7 +327,7 @@ private final class NextBotApp: NSObject, NSApplicationDelegate, WKNavigationDel
         let home = NSTextField(string: defaults.string(forKey: "codexHome") ?? "")
         home.placeholderString = "~/.codex（留空使用 CLI 默认目录）"
         let version = NSTextField(string: defaults.string(forKey: "codexVersion") ?? "")
-        version.placeholderString = "codex --version 的完整输出"
+        version.placeholderString = bundledCodexVersion.isEmpty ? "codex --version 的完整输出" : "默认 \(bundledCodexVersion)"
         let claudeHome = NSTextField(string: defaults.string(forKey: "claudeHome") ?? "")
         claudeHome.placeholderString = "独立的 Claude Code 登录目录"
         let claudeVersion = NSTextField(string: defaults.string(forKey: "claudeVersion") ?? "")
@@ -326,7 +346,7 @@ private final class NextBotApp: NSObject, NSApplicationDelegate, WKNavigationDel
         }
         let alert = NSAlert()
         alert.messageText = "本机 Agent 设置"
-        alert.informativeText = "请填写已经在本机验证的 CLI 版本。保存会重启本机服务，可能中断正在运行的任务。"
+        alert.informativeText = "Codex 版本留空时使用安装包已验证的版本。保存会重启本机服务，可能中断正在运行的任务。"
         alert.accessoryView = stack
         alert.addButton(withTitle: "保存并重启")
         alert.addButton(withTitle: "取消")

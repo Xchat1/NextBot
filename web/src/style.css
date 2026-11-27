@@ -338,6 +338,7 @@ fieldset { border: 0; margin: 0; min-width: 0; }
   .task-form { grid-template-columns: 1fr; }
 }
 @media (max-width: 740px) {
+  input:not([type=checkbox]), textarea { font-size: 16px; }
   .shell { display: flex; flex-direction: column; height: auto; min-height: 100dvh; overflow: visible; }
   .main-shell { display: contents; }
   .topbar { order: -2; min-height: 54px; padding-inline: 13px; }
@@ -372,6 +373,7 @@ fieldset { border: 0; margin: 0; min-width: 0; }
   .bind-feature p { margin-top: 7px; font-size: 13px; max-width: none; }
 }
 @media (max-width: 400px) {
+  .review-callout .callout-actions { flex-basis: 100%; justify-content: flex-end; }
   .task-glyph, .task-row .row-arrow { display: none; }
   .request-facts, .form-columns { grid-template-columns: 1fr; }
   .task-row { min-height: 55px; }

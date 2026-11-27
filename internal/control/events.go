@@ -165,6 +165,9 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-Accel-Buffering", "no")
 			w.WriteHeader(200)
 			open = true
+			if _, err = fmt.Fprint(w, ": ready\n\n"); err != nil {
+				return
+			}
 			if err = controller.Flush(); err != nil {
 				return
 			}
