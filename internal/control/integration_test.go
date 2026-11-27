@@ -54,9 +54,9 @@ func (b *browser) call(t *testing.T, method, path, key string, body any, status 
 }
 func (b *browser) session(t *testing.T) {
 	t.Helper()
-	s := parse[map[string]string](t, b.call(t, "GET", "session", "", nil, 200))
-	b.csrf = s["csrfToken"]
-	b.device = s["deviceId"]
+	s := parse[struct{ CSRFToken, DeviceID string }](t, b.call(t, "GET", "session", "", nil, 200))
+	b.csrf = s.CSRFToken
+	b.device = s.DeviceID
 }
 func parse[T any](t *testing.T, b []byte) T {
 	t.Helper()
@@ -173,7 +173,21 @@ func TestOwnerWorkflow(t *testing.T) {
 	base := "0123456789abcdef0123456789abcdef01234567"
 	runReport(t, server, rc, "base_resolved", "", map[string]any{"commitId": base})
 	v = parse[Resolution](t, desktop.call(t, "GET", "projects/"+p.ID+"/base-resolutions/"+v.ID, "", nil, 200))
-	task := taskCreate(t, desktop, p, v, true)
+	strict := &Server{Store: s, Origin: server.Origin, AllowHTTP: true, RequireReview: true, History: server.History}
+	strictPublic := httptest.NewServer(strict.Public(http.NotFoundHandler()))
+	defer strictPublic.Close()
+	strictBrowser := *desktop
+	strictBrowser.base = strictPublic.URL
+	draft := parse[Task](t, strictBrowser.call(t, "POST", "tasks", ID(), input{
+		"projectId": p.ID, "title": "Review required", "goal": "Fix export", "scope": "export.sh", "acceptanceCriteria": "Maintain headers",
+	}, 201))
+	denied := parse[input](t, strictBrowser.call(t, "POST", "tasks/"+draft.ID+"/submit", ID(), input{
+		"expectedRevision": draft.Revision, "resolutionId": v.ID, "baseCommit": v.Commit,
+	}, 400))
+	if denied.object("error").str("code") != "review_required" || taskGet(t, desktop, draft.ID).State != "draft" {
+		t.Fatalf("required review was skipped: %v", denied)
+	}
+	task := taskCreate(t, &strictBrowser, p, v, true)
 	step(t, server)
 	start := claim(t, server, n, "start_execution")
 	runReport(t, server, start, "", "received", nil)

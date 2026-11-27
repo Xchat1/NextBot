@@ -188,6 +188,9 @@ func (s *Server) action(tx *transaction, id, route string, ss session, i input) 
 			if t.Title == "" || t.Goal == "" || t.Scope == "" || t.Criteria == "" || t.ProjectID == "" {
 				return result{}, invalid("请填写项目、标题、目标、范围与验收条件")
 			}
+			if s.RequireReview && t.Reviewer == "" {
+				return result{}, fail(400, "review_required", "当前实例要求选择独立只读复核 Agent")
+			}
 			v, err := found[Resolution](tx, "resolution", i.str("resolutionId"))
 			if err != nil {
 				return result{}, err

@@ -1,0 +1,19 @@
+[Unit]
+Description=NextBot Control
+Wants=nextbot-runner.service
+
+[Service]
+Type=simple
+UMask=0077
+RuntimeDirectory=nextbot
+RuntimeDirectoryMode=0700
+StateDirectory=nextbot
+StateDirectoryMode=0700
+Environment=NEXTBOT_LISTEN=127.0.0.1:8787 NEXTBOT_REQUIRE_REVIEW=true
+EnvironmentFile=%h/.config/nextbot/nextbot.env
+ExecStart=%h/.local/bin/nextbot control --data %S/nextbot/control --socket %t/nextbot/runner.sock --listen ${NEXTBOT_LISTEN} --origin ${NEXTBOT_ORIGIN} --require-review=${NEXTBOT_REQUIRE_REVIEW}
+Restart=on-failure
+RestartSec=3s
+
+[Install]
+WantedBy=default.target

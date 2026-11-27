@@ -87,7 +87,8 @@ private final class NextBotApp: NSObject, NSApplicationDelegate, WKNavigationDel
         let workspace = NSMenu(title: "工作区")
         for (title, action, key) in [
             ("添加本机仓库…", #selector(addRepository), "o"),
-            ("Codex 设置…", #selector(configureCodex), ","),
+            ("Agent 设置…", #selector(configureAgents), ","),
+            ("手机接手设置…", #selector(configurePhone), ""),
             ("重新载入控制台", #selector(reloadConsole), "r"),
             ("重新绑定本机…", #selector(recoverOwner), ""),
             ("查看本机日志", #selector(openLog), "")
@@ -105,7 +106,7 @@ private final class NextBotApp: NSObject, NSApplicationDelegate, WKNavigationDel
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.init("repository"), .flexibleSpace, .init("codex"), .init("reload")]
+        [.init("repository"), .flexibleSpace, .init("phone"), .init("agents"), .init("reload")]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -119,7 +120,8 @@ private final class NextBotApp: NSObject, NSApplicationDelegate, WKNavigationDel
         let action: Selector
         switch identifier.rawValue {
         case "repository": (label, icon, action) = ("添加仓库", "folder.badge.plus", #selector(addRepository))
-        case "codex": (label, icon, action) = ("Codex 设置", "gearshape", #selector(configureCodex))
+        case "agents": (label, icon, action) = ("Agent 设置", "gearshape", #selector(configureAgents))
+        case "phone": (label, icon, action) = ("手机接手", "iphone", #selector(configurePhone))
         case "reload": (label, icon, action) = ("重新载入", "arrow.clockwise", #selector(reloadConsole))
         default: return nil
         }
@@ -154,12 +156,17 @@ private final class NextBotApp: NSObject, NSApplicationDelegate, WKNavigationDel
         startupOutput.removeAll()
         showStatus("正在启动 NextBot", detail: "正在连接这台 Mac 上的控制服务。")
         do {
-            let process = try makeProcess([
+            var arguments = [
                 "desktop", "--data", dataDirectory.path,
                 "--parent-pid", String(ProcessInfo.processInfo.processIdentifier),
                 "--codex-home", defaults.string(forKey: "codexHome") ?? "",
-                "--verified-codex-version", defaults.string(forKey: "codexVersion") ?? ""
-            ])
+                "--verified-codex-version", defaults.string(forKey: "codexVersion") ?? "",
+                "--claude-home", defaults.string(forKey: "claudeHome") ?? "",
+                "--verified-claude-version", defaults.string(forKey: "claudeVersion") ?? "",
+                "--phone-origin", defaults.string(forKey: "phoneOrigin") ?? ""
+            ]
+            if defaults.bool(forKey: "requireReview") { arguments.append("--require-review") }
+            let process = try makeProcess(arguments)
             if !fileManager.fileExists(atPath: logURL.path) {
                 fileManager.createFile(atPath: logURL.path, contents: nil, attributes: [.posixPermissions: 0o600])
             }
@@ -230,7 +237,7 @@ private final class NextBotApp: NSObject, NSApplicationDelegate, WKNavigationDel
             restarting = false
             startBackend()
         } else {
-            showStatus("本机服务已停止", detail: "退出状态 (process.terminationStatus)。如需排查，请查看本机日志。", retry: true)
+            showStatus("本机服务已停止", detail: "退出状态 \(process.terminationStatus)。如需排查，请查看本机日志。", retry: true)
         }
     }
 
@@ -295,26 +302,73 @@ private final class NextBotApp: NSObject, NSApplicationDelegate, WKNavigationDel
         }
     }
 
-    @objc private func configureCodex() {
+    @objc private func configureAgents() {
         let home = NSTextField(string: defaults.string(forKey: "codexHome") ?? "")
         home.placeholderString = "~/.codex（留空使用 CLI 默认目录）"
         let version = NSTextField(string: defaults.string(forKey: "codexVersion") ?? "")
         version.placeholderString = "codex --version 的完整输出"
+        let claudeHome = NSTextField(string: defaults.string(forKey: "claudeHome") ?? "")
+        claudeHome.placeholderString = "独立的 Claude Code 登录目录"
+        let claudeVersion = NSTextField(string: defaults.string(forKey: "claudeVersion") ?? "")
+        claudeVersion.placeholderString = "claude --version 的完整输出"
+        let review = NSButton(checkboxWithTitle: "提交新任务时要求独立只读复核", target: nil, action: nil)
+        review.state = defaults.bool(forKey: "requireReview") ? .on : .off
         let stack = NSStackView(views: [NSTextField(labelWithString: "Codex 登录目录"), home,
-                                        NSTextField(labelWithString: "已验证的 Codex 版本"), version])
+                                        NSTextField(labelWithString: "已验证的 Codex 版本"), version,
+                                        NSTextField(labelWithString: "Claude Code 登录目录"), claudeHome,
+                                        NSTextField(labelWithString: "已验证的 Claude Code 复核版本"), claudeVersion, review])
         stack.orientation = .vertical
         stack.alignment = .leading
         home.widthAnchor.constraint(equalToConstant: 340).isActive = true
-        version.widthAnchor.constraint(equalTo: home.widthAnchor).isActive = true
+        for field in [version, claudeHome, claudeVersion] {
+            field.widthAnchor.constraint(equalTo: home.widthAnchor).isActive = true
+        }
         let alert = NSAlert()
-        alert.messageText = "本机 Codex 设置"
-        alert.informativeText = "应用会使用该目录中的 CLI 登录。填入已验证版本后可启用文件执行。保存会重启本机服务，可能中断正在运行的任务。"
+        alert.messageText = "本机 Agent 设置"
+        alert.informativeText = "请填写已经在本机验证的 CLI 版本。保存会重启本机服务，可能中断正在运行的任务。"
         alert.accessoryView = stack
         alert.addButton(withTitle: "保存并重启")
         alert.addButton(withTitle: "取消")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         defaults.set((home.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) as NSString).expandingTildeInPath, forKey: "codexHome")
         defaults.set(version.stringValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "codexVersion")
+        defaults.set((claudeHome.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) as NSString).expandingTildeInPath, forKey: "claudeHome")
+        defaults.set(claudeVersion.stringValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "claudeVersion")
+        defaults.set(review.state == .on, forKey: "requireReview")
+        restartBackend()
+    }
+
+    @objc private func configurePhone() {
+        let origin = NSTextField(string: defaults.string(forKey: "phoneOrigin") ?? "")
+        origin.placeholderString = "https://nextbot.example.internal"
+        origin.frame.size = NSSize(width: 340, height: 24)
+        let alert = NSAlert()
+        alert.messageText = "手机接手设置"
+        alert.informativeText = "填写手机可访问的私网 HTTPS 地址。请将该地址反向代理到这台 Mac 的 127.0.0.1:18787，并保留原始 Host。留空会关闭手机入口。保存会重启本机服务。"
+        alert.accessoryView = origin
+        alert.addButton(withTitle: "保存并重启")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let value = origin.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !value.isEmpty {
+            guard let parts = URLComponents(string: value), parts.scheme == "https",
+                  let host = parts.host, !host.isEmpty, host == host.lowercased(), !host.contains("%"),
+                  parts.user == nil, parts.password == nil, parts.path.isEmpty, parts.query == nil,
+                  parts.fragment == nil, !value.hasSuffix(":"), parts.string == value,
+                  parts.port.map({ (1...65535).contains($0) && $0 != 443 }) ?? true,
+                  !(host == "127.0.0.1" && parts.port == 18787) else {
+                let invalid = NSAlert()
+                invalid.messageText = "请输入完整的私网 HTTPS 来源"
+                invalid.informativeText = "地址使用小写主机名，可填非默认端口，省略末尾斜杠。"
+                invalid.runModal()
+                return
+            }
+        }
+        defaults.set(value, forKey: "phoneOrigin")
+        restartBackend()
+    }
+
+    private func restartBackend() {
         if let backend, backend.isRunning {
             restarting = true
             backend.terminate()

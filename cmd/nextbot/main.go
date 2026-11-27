@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -46,12 +47,16 @@ func run(ctx context.Context, args []string) error {
 		origin := fs.String("origin", "https://nextbot.local", "browser origin")
 		history := fs.Int("event-window", 10000, "number of synchronization events retained for replay")
 		dev := fs.Bool("dev-http", false, "allow a loopback HTTP browser origin for development")
+		review := fs.Bool("require-review", false, "require an independent reviewer for newly submitted tasks")
 		uid := fs.Uint("runner-uid", uint(os.Getuid()), "authorized local Runner UID")
 		gid := fs.Int("socket-gid", -1, "socket group for a separate Runner account")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		return serve(ctx, *dir, *socket, *addr, *origin, *history, *dev, uint32(*uid), *gid, nil)
+		return serve(ctx, controlConfig{
+			dir: *dir, socket: *socket, addr: *addr, origin: *origin, history: *history,
+			devHTTP: *dev, uid: uint32(*uid), gid: *gid, requireReview: *review,
+		}, nil)
 	case "runner":
 		dir := fs.String("data", ".nextbot/runner", "local Runner state directory")
 		socket := fs.String("socket", ".nextbot/runner.sock", "private Control socket")
@@ -227,13 +232,27 @@ func addProject(ctx context.Context, s *control.Store, name, repo, testFile stri
 	}
 	return printJSON(p)
 }
-func serve(ctx context.Context, dir, socket, addr, origin string, history int, dev bool, uid uint32, gid int, ready func(*control.Store, string) error) error {
+
+type controlConfig struct {
+	dir, socket, addr, origin, phoneOrigin string
+	history, gid                           int
+	uid                                    uint32
+	devHTTP, requireReview                 bool
+}
+
+func serve(ctx context.Context, config controlConfig, ready func(*control.Store, string) error) error {
+	dir, socket, addr, origin := config.dir, config.socket, config.addr, config.origin
 	if ready == nil || origin != "" {
-		if err := control.ValidateOrigin(origin, dev); err != nil {
+		if err := control.ValidateOrigin(origin, config.devHTTP); err != nil {
 			return err
 		}
 	}
-	if history < 1 {
+	if config.phoneOrigin != "" {
+		if err := control.ValidateOrigin(config.phoneOrigin, false); err != nil {
+			return fmt.Errorf("invalid phone origin: %w", err)
+		}
+	}
+	if config.history < 1 {
 		return fmt.Errorf("event window must be positive")
 	}
 	host, _, err := net.SplitHostPort(addr)
@@ -267,7 +286,15 @@ func serve(ctx context.Context, dir, socket, addr, origin string, history int, d
 	if origin == "" {
 		origin = "http://" + outer.Addr().String()
 	}
-	s := &control.Server{Store: store, Origin: origin, AllowHTTP: dev && strings.HasPrefix(origin, "http:"), History: history}
+	originURL, _ := url.Parse(origin) // Validated above or derived from the listener.
+	phoneHost := strings.TrimPrefix(config.phoneOrigin, "https://")
+	if phoneHost == originURL.Host {
+		return fmt.Errorf("phone origin must use a different host or port than the local console")
+	}
+	s := &control.Server{
+		Store: store, Origin: origin, AllowHTTP: config.devHTTP && strings.HasPrefix(origin, "http:"),
+		History: config.history, PairingOrigin: config.phoneOrigin, RequireReview: config.requireReview,
+	}
 	if err = os.MkdirAll(filepath.Dir(socket), 0700); err != nil {
 		return err
 	}
@@ -294,8 +321,8 @@ func serve(ctx context.Context, dir, socket, addr, origin string, history int, d
 		return err
 	}
 	defer inner.Close()
-	if gid >= 0 {
-		if err = os.Chown(socket, -1, gid); err != nil {
+	if config.gid >= 0 {
+		if err = os.Chown(socket, -1, config.gid); err != nil {
 			return err
 		}
 		if err = os.Chmod(socket, 0660); err != nil {
@@ -304,14 +331,34 @@ func serve(ctx context.Context, dir, socket, addr, origin string, history int, d
 	} else if err = os.Chmod(socket, 0600); err != nil {
 		return err
 	}
-	public := &http.Server{Handler: s.Public(web.Handler()), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
+	static := web.Handler()
+	localHandler := s.Public(static)
+	var phoneHandler http.Handler
+	if config.phoneOrigin != "" {
+		phone := &control.Server{
+			Store: store, Origin: config.phoneOrigin, History: config.history,
+			PairingOnly: true, RequireReview: config.requireReview,
+		}
+		phoneHandler = phone.Public(static)
+	}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Host == originURL.Host:
+			localHandler.ServeHTTP(w, r)
+		case phoneHandler != nil && r.Host == phoneHost:
+			phoneHandler.ServeHTTP(w, r)
+		default:
+			http.Error(w, "unexpected host", http.StatusMisdirectedRequest)
+		}
+	})
+	public := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	internal := &http.Server{Handler: s.Internal(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 30 * time.Second}
 	maintenance, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go s.Maintenance(maintenance)
 	result := make(chan error, 2)
 	go func() { result <- public.Serve(outer) }()
-	go func() { result <- internal.Serve(peerListener{inner, uid}) }()
+	go func() { result <- internal.Serve(peerListener{inner, config.uid}) }()
 	defer public.Close()
 	defer internal.Close()
 	if ready != nil {

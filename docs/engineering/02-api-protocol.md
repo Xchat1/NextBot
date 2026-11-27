@@ -42,13 +42,15 @@
 | 方法与路径 | 调用身份与输入 | 成功响应 |
 | --- | --- | --- |
 | POST `/owner/claim` | 本机签发的初始化或恢复票据，`ticket, deviceName`，严格校验来源 | 201，设备描述，设置仅限该设备的会话。已消费或到期的票据返回通用无效结果。 |
-| GET `/session` | 已配对设备 | 200，`ownerId, deviceId, instanceId, csrfToken`。恢复后已失效会话返回 401。 |
+| GET `/session` | 已配对设备 | 200，`ownerId, deviceId, instanceId, csrfToken, pairingOrigin, requireReview`。`pairingOrigin` 是 Mac 本机客户端用于构建配对链接的私网 HTTPS 来源。空值表示未配置其他来源。失效会话返回 401。 |
 | POST `/pairings` | 已配对设备，`deviceLabel` 可选 | 201，`pairingId, token, expiresAt`。机密只在授权发起设备的配对响应内返回。 |
 | POST `/pairings/claim` | 新设备，`token, deviceName`，严格校验来源 | 201，创建 Device 并设置会话。消费与发证原子完成。同一票据无法领出第二个设备会话。 |
 | GET `/devices` | 已配对设备 | 200，设备标识、昵称、绑定与最近访问时间、撤销状态及 `isCurrent`。 |
 | POST `/devices/{deviceId}/revoke` | 已配对设备，目标属于同一所有者 | 200，目标撤销时间。服务端检查每次请求、关闭该设备的开放 SSE，并拒绝重连。 |
 
 浏览器会话使用 host-only、Secure、HttpOnly、SameSite=Strict Cookie，不向脚本暴露会话机密。Cookie 路径为 `/`。响应含机密时禁止缓存。所有已登录写请求校验精确 Origin 与会话绑定的 `X-CSRF-Token` 请求头。首次绑定及配对消费没有现存会话，要求预期 Origin、JSON 内容类型和单次票据。跨源读取默认拒绝。SSE、产物读取和分页续读同样核验当前设备授权。
+
+Mac 本机回环 HTTP 会话使用对应的 host-only Cookie。配置手机接手后，私网 HTTPS 来源独立校验 Host 与 Origin，并签发 Secure Cookie。Mac 的手机入口仅消费配对票据。若 `requireReview` 为真，新任务提交时缺少独立复核 Agent 返回 400 `review_required`。
 
 变更请求要求 `Idempotency-Key`。首次绑定及配对消费以一次性票据为额外准入条件，已成功消费后不得通过重试向另一个浏览器重发 Cookie。若响应丢失，先查询 `/session`。无有效会话时从受信设备或本机重新取得票据。签发配对机密使用发起设备作用域，原 token 仅在首次成功响应返回，同一发起设备重试只取得 `pairingId, expiresAt` 和“机密已签发”。丢失该机密时可重新签发，新票据取代该设备未使用的旧票据。普通业务写沿用下一节的所有者级幂等规则。
 

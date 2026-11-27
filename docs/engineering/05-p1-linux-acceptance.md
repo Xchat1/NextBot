@@ -33,12 +33,20 @@
 
 ### 2.1 前置环境
 
-> `cmd/nextbot` 使用 Linux `SO_PEERCRED`、`/proc/<pid>/stat`、`Pdeathsig` 与 rootless Podman/Docker，Control 与 Runner 需运行在 Linux 主机或 Linux VM 中。
+> 本节的受管容器验收需要 Linux 主机或 Linux VM。Mac 桌面应用可运行本机文件任务，参见 [私网部署与维护](06-private-deployment.md)。
 
 - **OS**：Linux（首选 `x86_64`；`aarch64` 如 Lima/Colima VM 需单独标注架构）
 - **工具链**：Go 1.25+、GCC / libc6-dev（`mattn/go-sqlite3` CGO 编译）、Node.js 22.12+、Git、Python 3、SQLite CLI
 - **容器执行器**（二选一，必须为 rootless 模式）：
   - **Rootless Podman**（推荐）：`podman info --format '{{.Host.Security.Rootless}}'` 输出 `true`
+    - Ubuntu/Debian cgroup v2 主机启用资源限制（`--pids-limit`、`--memory`、`--cpus`）时，需安装 `dbus-user-session`、`uidmap`、`slirp4netns`，并确保运行 Runner 的系统账号开启 lingering 且存在 user systemd D-Bus session：
+      ```sh
+      sudo apt-get install -y podman dbus-user-session uidmap slirp4netns
+      sudo loginctl enable-linger "$USER"
+      sudo systemctl start "user@$(id -u).service"
+      export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+      ```
+    - 检查运行账号在 `/etc/subuid`、`/etc/subgid` 有独立的映射范围。缺少映射时，Podman 可能无法解包镜像。缺少用户 D-Bus 会话时，容器可能无法应用资源限制。
   - **Rootless Docker**：`docker info --format '{{json .SecurityOptions}}'` 包含 `rootless`
 - **Codex CLI**：
   - 安装真实 `codex`（如 `@openai/codex`），并准备**独立的专用 `CODEX_HOME`**，不要复用包含个人 MCP Server 的 `~/.codex/config.toml`（避免加载本地自定义 `mcp_servers.*`）。
@@ -141,6 +149,18 @@ python3 scripts/p1/run_p1_acceptance.py \
 ```
 
 > 说明：`codex_harness.py` 实现与 `internal/runner/codex.go` 一致的 stdio `app-server` JSON-RPC 协议，用于无模型波动的确定性故障与回归测试；正式签收时需明确区分哪些用例使用真实 `codex` CLI 与真实 iPhone Safari，哪些使用辅助夹具。
+
+### 浏览器交接
+
+在已登记演示仓库、尚未认领的 P1 实例上使用新签发的所有者链接。脚本启动 Playwright 管理的 Chromium，用各自独立的桌面和触屏窄屏浏览器会话验证离线重连、授权、拒绝授权、证据验收和设备撤权。
+
+```sh
+npm --prefix web ci
+npm --prefix web exec -- playwright install chromium
+node scripts/p1/verify_web_ui.mjs --claim-url "$CLAIM_URL"
+```
+
+使用 `codex_harness.py` 的环境可追加 `--without-managed-test`，改测手机答复及文件差异验收，无需容器运行时。
 
 ---
 

@@ -49,10 +49,13 @@ func ok(data any) result              { return result{200, data} }
 
 type Server struct {
 	*Store
-	Origin    string
-	History   int
-	AllowHTTP bool
-	snapshots sync.Map
+	Origin        string
+	History       int
+	AllowHTTP     bool
+	PairingOnly   bool
+	PairingOrigin string
+	RequireReview bool
+	snapshots     sync.Map
 }
 
 const cookieName = "nextbot_session"
@@ -66,7 +69,9 @@ func (s *Server) Public(static http.Handler) http.Handler {
 		}
 		writeJSON(w, 200, map[string]string{"status": "ok"})
 	})
-	m.HandleFunc("POST /api/v1/owner/claim", s.claim("owner"))
+	if !s.PairingOnly {
+		m.HandleFunc("POST /api/v1/owner/claim", s.claim("owner"))
+	}
 	m.HandleFunc("POST /api/v1/pairings/claim", s.claim("pairing"))
 	m.HandleFunc("GET /api/v1/events", s.events)
 	m.HandleFunc("GET /api/v1/artifacts/{id}/entries/{entry}", s.artifactBytes)
@@ -426,7 +431,10 @@ func (s *Server) query(tx *transaction, r *http.Request, ss session, route strin
 	id := r.PathValue("id")
 	switch route {
 	case "session":
-		return map[string]string{"ownerId": ss.Owner, "deviceId": ss.Device.ID, "instanceId": ss.Instance, "csrfToken": ss.CSRF}, nil
+		return map[string]any{
+			"ownerId": ss.Owner, "deviceId": ss.Device.ID, "instanceId": ss.Instance,
+			"csrfToken": ss.CSRF, "pairingOrigin": s.PairingOrigin, "requireReview": s.RequireReview,
+		}, nil
 	case "devices":
 		ds, err := list[Device](tx, "device", "")
 		for i := range ds {
@@ -595,8 +603,19 @@ func (s *Server) Maintenance(ctx context.Context) {
 }
 func ValidateOrigin(raw string, allowHTTP bool) error {
 	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+	if err != nil || u.Hostname() == "" || u.User != nil || u.Path != "" || u.ForceQuery || u.RawQuery != "" || u.Fragment != "" || u.String() != raw {
 		return fmt.Errorf("origin must be an exact HTTPS origin")
+	}
+	port := u.Port()
+	if port != "" {
+		number, err := strconv.Atoi(port)
+		if err != nil || number < 1 || number > 65535 || strconv.Itoa(number) != port ||
+			(u.Scheme == "https" && number == 443) || (u.Scheme == "http" && number == 80) {
+			return fmt.Errorf("origin must omit the default port or use a canonical port number")
+		}
+	}
+	if strings.Contains(u.Host, "%") || strings.HasSuffix(u.Host, ":") || u.Host != strings.ToLower(u.Host) {
+		return fmt.Errorf("origin must use a canonical lowercase host")
 	}
 	if u.Scheme == "https" {
 		return nil

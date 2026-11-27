@@ -1,6 +1,6 @@
 # NextBot
 
-NextBot 面向自托管的多 Agent 编排与跨端控制。第一步是在 Mac 桌面应用内完成本机仓库的派单、执行、查看差异和验收。后续依次验证手机接手和云端部署。
+NextBot 面向自托管的多 Agent 编排与跨端控制。Mac 桌面应用负责本机仓库的派单、执行和验收，配对后的手机浏览器可以接手同一任务，也可将 Control 与 Runner 部署在自己的 Linux 主机上。
 
 ## Mac 桌面应用
 
@@ -8,9 +8,15 @@ NextBot 面向自托管的多 Agent 编排与跨端控制。第一步是在 Mac 
 
 1. 首次打开时为这台 Mac 命名并绑定设备。
 2. 从工具栏选择**添加仓库**，登记一个本机 Git 仓库。任务会使用独立的 Git worktree。
-3. 使用 Codex 执行时，CLI 需已安装并登录。在**Codex 设置**填写登录目录与已验证的完整版本。保存后等节点就绪，再新建任务。
+3. 使用 Codex 执行时，CLI 需已安装并登录。在**Agent 设置**填写登录目录与已验证的完整版本。保存后等节点就绪，再新建任务。使用 Claude Code 独立复核时，在同一界面填写其专用登录目录与已验证版本。
 
-关闭窗口后任务继续运行。退出 NextBot 或更改 Codex 设置会停止本机服务。任务和日志保存在 `~/Library/Application Support/NextBot`。此桌面版本先覆盖本机文件执行，受管容器测试继续使用 Linux 的部署路径。
+关闭窗口后任务继续运行。退出 NextBot 会停止本机服务，保存 Agent 或手机接手设置会重启服务。任务和日志保存在 `~/Library/Application Support/NextBot`。Mac 支持本机文件执行，受管容器测试使用 Linux 部署路径。
+
+## 手机接手
+
+1. 在 Mac 上用同一私网或 VPN 内的 HTTPS 反向代理转发到 `127.0.0.1:18787`，保留浏览器的 `Host`。可以使用 [Caddy 配置模板](deploy/Caddyfile.example)，让手机信任该站点的证书。
+2. 在 Mac 工具栏选择**手机接手**，保存手机可访问的 HTTPS 来源，例如 `https://nextbot.example.internal`。在**设置 → 可信设备**生成一次性链接，用手机浏览器打开并绑定设备。
+3. 关闭 Mac 窗口后，手机仍可查看任务、答复问题、处理授权及验收当前产物。要停止手机入口，在 Mac 设置中清空 HTTPS 来源。要使某台手机的会话失效，在可信设备中撤销该设备。
 
 ## Linux 构建与启动
 
@@ -20,6 +26,8 @@ NextBot 面向自托管的多 Agent 编排与跨端控制。第一步是在 Mac 
 make build
 make test
 ```
+
+长期运行请使用仓库提供的 [Linux 用户服务与私网部署说明](docs/engineering/06-private-deployment.md)，包含 systemd 单元、配置模板和恢复步骤。
 
 在两个独立终端启动 Control 与 Runner。以下命令使用默认数据目录和 Unix 套接字。
 
@@ -65,7 +73,7 @@ bin/nextbot project-add --name "报告服务" --repo /path/to/repository
 
 准备一个可写的专用 Codex 登录目录。在合成仓库上按 G1–G3 验证文件编辑、终端限制、授权和取消后，启动 Runner 时传入 `--verified-codex-version`，值为 `codex --version` 的完整输出。节点还会检查登录和 stdio 握手。受管测试需要配置已验证的 rootless Podman 或 Docker，并传入 `--enable-managed-tests`。使用 Docker 时同时传入 `--container-engine docker`。
 
-启用 P2 路径需在执行主机安装并登录 Claude Code，验证无工具的一次性只读配置，然后传入 `--claude-home` 与 `--verified-claude-version`。建单时选择 Claude Code 独立只读复核。复核读取指定产物版本的归档内容，验收要求当前版本的通过结论。反向组合使用同一套验证用例，通过后可用 `--verified-claude-execution-version` 和 `--verified-codex-review-version` 再开放。
+启用 P2 路径需在执行主机安装并登录 Claude Code，验证无工具的一次性只读配置，然后传入 `--claude-home` 与 `--verified-claude-version`。Mac 可在 **Agent 设置**要求独立复核，Linux Control 可传入 `--require-review`。此策略适用于新提交的任务。复核读取指定产物版本的归档内容，验收要求当前版本的通过结论。反向组合使用同一套验证用例，通过后可用 `--verified-claude-execution-version` 和 `--verified-codex-review-version` 再开放。
 
 ## 维护与恢复
 
@@ -82,6 +90,8 @@ bin/nextbot project-add --name "报告服务" --repo /path/to/repository
 | [接口与数据交换协议](docs/engineering/02-api-protocol.md) | 桌面、手机、控制服务与执行节点交换哪些请求、事件和回执 |
 | [持久化与故障恢复](docs/engineering/03-data-recovery.md) | 任务、产物、审批存在哪里，断线、重启和重放时如何核对结果 |
 | [P1 开发任务与验收计划](docs/engineering/04-p1-delivery.md) | 各项工作依赖什么，哪些证据齐全后可以进入内部试用 |
+| [P1 Linux 验收](docs/engineering/05-p1-linux-acceptance.md) | 如何复验容器测试、双端交接和故障恢复 |
+| [私网部署与维护](docs/engineering/06-private-deployment.md) | 如何启用 Mac 手机接手并在 Linux 持续运行 |
 
 ## 产品依据
 

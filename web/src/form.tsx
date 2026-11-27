@@ -11,7 +11,8 @@ export function TaskForm({ task, session, snapshot, online, refresh }: { task?: 
   const [criteria, setCriteria] = useState(task?.acceptanceCriteria ?? '')
   const [ref, setRef] = useState(task?.refName || 'HEAD')
   const [execution, setExecution] = useState(task?.executionAgent || 'codex')
-  const [reviewer, setReviewer] = useState(task?.reviewAgent ?? '')
+  const independentReviewer = (executor: string) => executor === 'claude' ? 'codex' : 'claude'
+  const [reviewer, setReviewer] = useState(task?.reviewAgent || (session.requireReview ? independentReviewer(execution) : ''))
   const [test, setTest] = useState(task?.testId ?? '')
   const [required, setRequired] = useState(task?.requireTest ?? false)
   const [saved, setSaved] = useState(task)
@@ -21,7 +22,8 @@ export function TaskForm({ task, session, snapshot, online, refresh }: { task?: 
   const project = snapshot.projects.find(item => item.projectId === projectId)
   const node = snapshot.nodes.find(item => item.nodeId === project?.nodeId)
   const capability = node?.adapterCapabilities[execution]
-  const ready = node?.availability === 'online' && capability?.execution && (!test || capability.managedTests) && (!reviewer || node.adapterCapabilities[reviewer]?.readOnlyReview)
+  const ready = node?.availability === 'online' && capability?.execution && (!test || capability.managedTests) &&
+    (reviewer ? node.adapterCapabilities[reviewer]?.readOnlyReview : !session.requireReview)
   const complete = title.trim() && goal.trim() && scope.trim() && criteria.trim() && projectId !== ''
   const fields = { projectId, title, goal, scope, acceptanceCriteria: criteria, refName: ref, executionAgent: execution, reviewAgent: reviewer, testId: test, requireTest: required }
 
@@ -85,12 +87,12 @@ export function TaskForm({ task, session, snapshot, online, refresh }: { task?: 
             <button type="button" className="button secondary" disabled={!projectId || !ref.trim() || !online || node?.availability !== 'online'} onClick={() => void resolve()}>{busy === 'base' ? '正在解析…' : '解析 Git 基准'}</button></div></label>
           {resolution?.commitId && <div className="commit-confirm"><GitBranch size={16} /> <span>固定提交</span><code>{resolution.commitId}</code></div>}
           <div className="form-columns">
-            <label>执行 Agent<select aria-label="执行 Agent" value={execution} onChange={e => { setExecution(e.target.value); setReviewer('') }}>
+            <label>执行 Agent<select aria-label="执行 Agent" value={execution} onChange={e => { setExecution(e.target.value); setReviewer(session.requireReview ? independentReviewer(e.target.value) : '') }}>
               <option value="codex">Codex · 本地节点</option>
               {(node?.adapterCapabilities.claude?.execution || execution === 'claude') && <option value="claude">Claude Code · 本地节点</option>}
             </select></label>
             <label>复核方式<select aria-label="复核方式" value={reviewer} onChange={e => setReviewer(e.target.value)}>
-              <option value="">直接人工验收</option>
+              {!session.requireReview && <option value="">直接人工验收</option>}
               {execution !== 'claude' && <option value="claude">Claude Code 独立只读复核</option>}
               {execution === 'claude' && <option value="codex">Codex 独立只读复核</option>}
             </select></label>
