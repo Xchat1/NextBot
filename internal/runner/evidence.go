@@ -16,8 +16,13 @@ import (
 )
 
 type archiveEntry struct {
-	id, kind, media string
-	b               []byte
+	ID, Kind, Media string
+	Bytes           []byte
+}
+
+type executionArchive struct {
+	Base, Outcome, Reason, ReportID string
+	Entries                         []archiveEntry
 }
 
 const textMedia = "text/plain; charset=utf-8"
@@ -26,7 +31,7 @@ const jsonMedia = "application/json"
 func (r *Runner) entry(ctx context.Context, artID, entryID string) ([]byte, error) {
 	return retry(ctx, func() ([]byte, error) { return r.c.send(ctx, "GET", "artifacts/"+artID+"/entries/"+entryID, "", nil) })
 }
-func (r *Runner) archive(ctx context.Context, a *activeAttempt, c control.Command, patch []byte, fingerprint, summary string, logs []archiveEntry) (string, error) {
+func executionEntries(patch []byte, fingerprint, summary string, logs []archiveEntry) []archiveEntry {
 	entries := []archiveEntry{
 		{"change.patch", "diff", "text/x-diff; charset=utf-8", patch},
 		{"summary.txt", "agent_statement", textMedia, []byte(summary)},
@@ -36,12 +41,22 @@ func (r *Runner) archive(ctx context.Context, a *activeAttempt, c control.Comman
 	if len(logs) == 0 {
 		entries = append(entries, archiveEntry{"test-status.txt", "not_run", textMedia, []byte("未运行受管测试。")})
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].id < entries[j].id })
+	return entries
+}
+
+func recoveredTestEntries(logs []archiveEntry) []archiveEntry {
+	return append([]archiveEntry{
+		{"recovery.txt", "execution_log", textMedia, []byte("仅保留已记录的测试证据。本次执行没有可归档的完整变更。")},
+	}, logs...)
+}
+
+func (r *Runner) archive(ctx context.Context, c control.Command, base string, entries []archiveEntry) (string, error) {
+	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
 	manifest := make([]control.Entry, 0, len(entries))
 	bytesByID := map[string][]byte{}
 	for _, e := range entries {
-		manifest = append(manifest, control.Entry{ID: e.id, MediaType: e.media, Size: int64(len(e.b)), SHA: control.Hash(e.b), Kind: e.kind})
-		bytesByID[e.id] = e.b
+		manifest = append(manifest, control.Entry{ID: e.ID, MediaType: e.Media, Size: int64(len(e.Bytes)), SHA: control.Hash(e.Bytes), Kind: e.Kind})
+		bytesByID[e.ID] = e.Bytes
 	}
 	type upload struct {
 		ID      string   `json:"uploadId"`
@@ -50,7 +65,7 @@ func (r *Runner) archive(ctx context.Context, a *activeAttempt, c control.Comman
 	}
 	u, err := retry(ctx, func() (upload, error) {
 		return post[upload](ctx, r.c, "artifact-uploads", map[string]any{
-			"attemptId": c.AttemptID, "uploadKey": c.ID, "baseCommit": a.task.Base, "manifest": manifest,
+			"attemptId": c.AttemptID, "uploadKey": c.ID, "baseCommit": base, "manifest": manifest,
 		})
 	})
 	if err != nil {
@@ -74,6 +89,56 @@ func (r *Runner) archive(ctx context.Context, a *activeAttempt, c control.Comman
 	})
 	return art.ID, err
 }
+
+func (r *Runner) publishExecution(ctx context.Context, c control.Command, saved executionArchive) error {
+	var artifactID string
+	var archiveErr error
+	outcome, reason := saved.Outcome, saved.Reason
+	if len(saved.Entries) > 0 {
+		artifactID, archiveErr = r.archive(ctx, c, saved.Base, saved.Entries)
+		if archiveErr != nil {
+			if ctx.Err() != nil {
+				return archiveErr
+			}
+			outcome, reason = "interrupted", "归档未完成："+archiveErr.Error()
+		}
+	}
+	report := makeReport(c, "execution_finished", "", "", map[string]any{
+		"outcome": outcome, "reason": reason, "stopped": true, "artifactVersionId": artifactID,
+	})
+	report.ID = saved.ReportID
+	if err := r.send(ctx, "reports", report); err != nil {
+		return err
+	}
+	if archiveErr != nil {
+		// Preserve the local copy if the controller rejected the archive.
+		return r.j.record(c, "settled")
+	}
+	return r.j.completeArchive(c)
+}
+
+func (r *Runner) recoverExecution(ctx context.Context, c control.Command) (bool, error) {
+	saved, err := r.j.executionArchive(c.ID)
+	if err != nil {
+		return false, err
+	}
+	if saved != nil {
+		return true, r.publishExecution(ctx, c, *saved)
+	}
+	logs, err := r.j.testEvidence(c.AttemptID)
+	if err != nil || len(logs) == 0 {
+		return false, err
+	}
+	task, err := fromMap[control.Task](c.Payload["task"])
+	if err != nil {
+		return false, err
+	}
+	// Publish the observed test results alone. The Agent's exit and final
+	// workspace fingerprint are still unknown.
+	_, err = r.archive(ctx, c, task.Base, recoveredTestEntries(logs))
+	return false, err
+}
+
 func (r *Runner) engineReady(ctx context.Context) bool {
 	path, err := exec.LookPath(r.cfg.ContainerEngine)
 	if err != nil {
@@ -221,22 +286,7 @@ func (r *Runner) runTest(serverCtx context.Context, a *activeAttempt, c control.
 		r.mu.Unlock()
 		return toolResult{"Test process status is unknown", false}, r.unknown(serverCtx, c, "容器停止结果待核对")
 	}
-	if journalErr == nil {
-		journalErr = r.j.processStopped(c)
-	}
-	if journalErr != nil {
-		r.mu.Lock()
-		a.unknown = true
-		r.mu.Unlock()
-		return toolResult{"Test journal is unavailable", false}, journalErr
-	}
-	if err = r.send(serverCtx, "receipts", startReport); err != nil {
-		return toolResult{"Could not report test start", false}, err
-	}
 	code := cmd.ProcessState.ExitCode()
-	if tctx.Err() == nil && (code == 125 || code == 126 || code == 127) {
-		return reject("测试容器或登记程序未能启动")
-	}
 	var exit any
 	if code >= 0 && tctx.Err() == nil {
 		exit = code
@@ -249,11 +299,30 @@ func (r *Runner) runTest(serverCtx context.Context, a *activeAttempt, c control.
 		"interrupted": errors.Is(tctx.Err(), context.Canceled), "command": a.test.Args, "image": a.test.Image,
 		"outputEntryId": idLog, "outputBytes": log.total, "outputTruncated": log.total > log.limit,
 	}, "", "  ")
-	r.mu.Lock()
-	a.testLogs = append(a.testLogs, archiveEntry{idRun, "observed_run", jsonMedia, b}, archiveEntry{idLog, "execution_log", textMedia, []byte(log.String())})
-	r.mu.Unlock()
-	if err = r.receipt(serverCtx, c, "finished", "实际测试已退出", map[string]any{"exitCode": exit}); err != nil {
+	entries := []archiveEntry{{idRun, "observed_run", jsonMedia, b}, {idLog, "execution_log", textMedia, []byte(log.String())}}
+	finish := makeReport(c, "", "finished", "实际测试已退出", map[string]any{"exitCode": exit})
+	launchFailed := tctx.Err() == nil && (code == 125 || code == 126 || code == 127)
+	if launchFailed {
+		entries = nil
+		finish.Phase, finish.Result, finish.Payload = "rejected", "测试容器或登记程序未能启动", nil
+	}
+	if journalErr == nil {
+		journalErr = r.j.finishTest(c, finish, entries)
+	}
+	if journalErr != nil {
+		r.mu.Lock()
+		a.unknown = true
+		r.mu.Unlock()
+		return toolResult{"Test journal is unavailable", false}, journalErr
+	}
+	if err = r.send(serverCtx, "receipts", startReport); err != nil {
+		return toolResult{"Could not report test start", false}, err
+	}
+	if err = r.send(serverCtx, "receipts", finish); err != nil {
 		return toolResult{"Test completed; reporting failed", false}, err
+	}
+	if launchFailed {
+		return toolResult{finish.Result, false}, nil
 	}
 	return toolResult{fmt.Sprintf("Registered test exit code: %d\n%s", code, log.String()), waitErr == nil && tctx.Err() == nil}, nil
 }

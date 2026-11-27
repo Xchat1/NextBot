@@ -630,7 +630,7 @@ func (s *Server) dispatch(tx *transaction, t *Task, n Node, role string) error {
 			if err != nil {
 				return err
 			}
-			if s.verify(art) == nil {
+			if _, patchErr := findEntry(art.Entries, "change.patch"); patchErr == nil && s.verify(art) == nil {
 				payload["previousArtifact"] = art
 			}
 		}
