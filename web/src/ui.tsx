@@ -6,7 +6,7 @@ export const statuses: Record<TaskState, string> = {
   draft: '草稿', queued: '排队中', running: '执行中', awaiting_review: '待复核',
   reviewing: '复核中', awaiting_acceptance: '待验收', completed: '已完成', failed: '已失败', cancelled: '已取消',
 }
-export const blockerLabels: Record<string, string> = { awaiting_approval: '等待授权', awaiting_input: '等待答复', node_disconnected: '节点失联' }
+export const blockerLabels: Record<string, string> = { awaiting_approval: '等待授权', awaiting_input: '等待答复', node_disconnected: '节点失联', capability_unavailable: '执行能力不可用' }
 export const results: Record<string, string> = {
   allow_once: '允许本次', deny: '已拒绝', answer: '已答复', expired: '已过期', pass: '复核通过',
   request_rework: '要求返工', accept: '已接受', running: '进行中', interrupted: '已中断',
@@ -59,9 +59,10 @@ export function TaskGlyph({ task }: { task: Task }) {
   return <GitBranch size={18} />
 }
 export function TaskRow({ task, project, label }: { task: Task; project?: string; label?: string }) {
+  const capabilityIssue = task.blockers.find(block => block.kind === 'capability_unavailable')?.message
   return <a className="task-row" href={'#task/' + task.taskId}>
     <div className={'task-glyph ' + task.state}><TaskGlyph task={task} /></div>
-    <div className="task-primary"><strong>{task.title || '未命名草稿'}</strong><span>{project || '未选择项目'} <span className="dot-sep">·</span> {label ?? agentName(task.executionAgent)}</span></div>
+    <div className="task-primary"><strong>{task.title || '未命名草稿'}</strong><span>{project || '未选择项目'} <span className="dot-sep">·</span> {label ?? agentName(task.executionAgent)}</span>{capabilityIssue && <span>{capabilityIssue}</span>}</div>
     <div className="task-row-status"><Status state={task.state} /><span>{date(task.updatedAt)}</span></div>
     <ChevronRight size={16} className="row-arrow" />
   </a>

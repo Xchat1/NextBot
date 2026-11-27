@@ -195,9 +195,13 @@ func value(s *string) string {
 	return *s
 }
 func block(t *Task, kind, source, message string) bool {
-	for _, b := range t.Blockers {
+	for index, b := range t.Blockers {
 		if b.Kind == kind && b.Source == source {
-			return false
+			if b.Message == message {
+				return false
+			}
+			t.Blockers[index].Message = message
+			return true
 		}
 	}
 	t.Blockers = append(t.Blockers, Blocker{kind, source, message})

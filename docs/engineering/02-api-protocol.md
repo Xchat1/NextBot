@@ -31,7 +31,7 @@
 | Request / Decision | `requestId, kind, taskId, attemptId, status, expiresAt, frozenInput, decision` | `kind` 为 `action_approval` 或 `user_question`。决定返回 `decisionId, outcome, decidedAt, deviceId`。自动过期的设备为空。 |
 | Event | `streamId, seq, type, occurredAt, taskId, attemptId, revision, data` | 实例级事件的任务字段可为空。`data` 只含已定义的变化摘要与资源引用，敏感输入、配对令牌不进入事件流。 |
 
-任务枚举依次为 `draft` 草稿、`queued` 排队中、`running` 执行中、`awaiting_review` 待复核、`reviewing` 复核中、`awaiting_acceptance` 待验收、`completed` 已完成、`failed` 已失败、`cancelled` 已取消。阻塞项分别使用 `awaiting_approval, awaiting_input, node_disconnected` 并携带来源对象。取消请求在节点确认前体现在命令进度中。
+任务枚举依次为 `draft` 草稿、`queued` 排队中、`running` 执行中、`awaiting_review` 待复核、`reviewing` 复核中、`awaiting_acceptance` 待验收、`completed` 已完成、`failed` 已失败、`cancelled` 已取消。阻塞项分别使用 `awaiting_approval, awaiting_input, node_disconnected, capability_unavailable` 并携带来源对象。排队任务出现执行能力缺失时，`capability_unavailable` 携带具体原因，能力恢复后自动解除。取消请求在节点确认前体现在命令进度中。
 
 ## 2. 所有者、配对与会话
 
@@ -143,6 +143,8 @@ Runner 以专用操作系统账号接入 socket。控制端检查 socket 所属�
 | P2 命令 `start_review`、报告 `review_finished` | 新复核尝试、原执行尝试、不可变产物、基准、证据和未决问题。返回 `pass` 或 `request_rework`、理由和已归档条目引用 | 只接受属于当前版本和有效只读复核尝试的结果。证据不够则退回。历史结论仅供追溯。 |
 
 节点重领命令时先查本地日志，已知结果重报原收据。若在记录执行意图后、取得可验证进程身份前崩溃，外部测试可能已启动，标记 `unknown` 并上报。租约到期或收到重复命令均不足以再次启动。只在能够证明未开始、原命令仍有效且上下文一致时才允许首次启动。即使控制端命令已经去重，平台仍须诚实展示无法确认的外部副作用。
+
+所有者及时作出允许或答复决定，而对应命令到期时仍未得到节点接收确认，控制服务会终止原命令，将请求结果记为 `expired`，保留所有者决定，并向仍在等待的原尝试派发一次 `resolve_tool` 到期通知。节点已确认接收的命令沿用其执行和回执流程。
 
 答复同样存在“已送至原生进程、回执未持久化”的窗口。适配器如支持按原生问题标识核实接受结果，可补记已送达。无法证实则报告 `unknown`，供所有者核对，不重复输入。`answerText` 仅在原任务的授权读取和定向交付所需数据中保留。SSE、普通审计日志、错误体和通用诊断只含请求与决定标识及交付状态。
 

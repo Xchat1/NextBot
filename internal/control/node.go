@@ -343,6 +343,9 @@ func (s *Server) applyReceipt(tx *transaction, t *Task, a *Attempt, c *Command, 
 		if err != nil {
 			return err
 		}
+		if q.CommandID != c.ID {
+			return nil
+		}
 		q.Result = r.Phase
 		if err = put(tx, "request", q.ID, q.TaskID, q); err != nil {
 			return err

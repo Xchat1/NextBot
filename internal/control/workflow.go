@@ -24,23 +24,44 @@ func nodeReady(n Node) bool {
 	return n.Availability == "online" && now().Sub(n.LastSeen) <= 15*time.Second
 }
 func checkCombo(n Node, t Task) error {
-	c := n.Capabilities[t.Agent]
 	if !nodeReady(n) {
 		return unavailable("执行节点尚未联机")
 	}
-	if !c.Execution || !c.Authenticated {
-		return unavailable("执行 Agent 或受限编辑能力尚未就绪")
-	}
-	if t.TestID != "" && !c.Tests {
-		return unavailable("节点尚未验证受管测试能力")
-	}
-	if t.Reviewer != "" {
-		rc := n.Capabilities[t.Reviewer]
-		if t.Reviewer == t.Agent || !rc.Review || !rc.Authenticated {
-			return unavailable("独立只读复核组合尚未就绪")
-		}
+	if reason := capabilityIssue(n, t); reason != "" {
+		return unavailable(reason)
 	}
 	return nil
+}
+func capabilityIssue(n Node, t Task) string {
+	c := n.Capabilities[t.Agent]
+	if reason := adapterIssue(t.Agent, c, c.Execution, "受限文件编辑能力不可用"); reason != "" {
+		return reason
+	}
+	if t.TestID != "" && !c.Tests {
+		return "节点的受管测试执行器未启用或不可用，检查节点设置与容器执行器"
+	}
+	if t.Reviewer != "" {
+		if t.Reviewer == t.Agent {
+			return "独立复核需要与执行不同的 Agent"
+		}
+		reviewer := n.Capabilities[t.Reviewer]
+		return adapterIssue(t.Reviewer, reviewer, reviewer.Review, "独立只读复核能力不可用")
+	}
+	return ""
+}
+func adapterIssue(agent string, capability Capabilities, supported bool, fallback string) string {
+	switch {
+	case capability.Authenticated && supported:
+		return ""
+	case capability.Reason != "":
+		return agent + " · " + capability.Reason
+	case !capability.Installed:
+		return agent + " CLI 尚未安装或未被节点检测到"
+	case !capability.Authenticated:
+		return agent + " CLI 登录不可用，请在执行节点重新登录"
+	default:
+		return agent + " · " + fallback
+	}
 }
 func applyDraft(t *Task, i input) error {
 	for k, p := range map[string]*string{"projectId": &t.ProjectID, "title": &t.Title, "goal": &t.Goal, "scope": &t.Scope, "acceptanceCriteria": &t.Criteria, "refName": &t.Ref, "executionAgent": &t.Agent, "reviewAgent": &t.Reviewer, "testId": &t.TestID} {
@@ -350,6 +371,44 @@ func settleRequest(tx *transaction, t *Task, r *Request, d Decision, status stri
 	}
 	return emit(tx, "request_decided", t, a.ID, map[string]any{"requestId": r.ID, "kind": r.Kind, "decisionId": d.ID, "outcome": d.Outcome, "deviceId": d.DeviceID})
 }
+
+// Expiry can revoke an unreceived command without guessing about work the
+// Runner has already been allowed to start.
+func expireUnreceivedDecision(tx *transaction, r *Request) error {
+	if r.Decision == nil || (r.Decision.Outcome != "allow_once" && r.Decision.Outcome != "answer") {
+		return nil
+	}
+	c, err := get[Command](tx, "command", r.CommandID)
+	if err != nil {
+		return err
+	}
+	if c.Phase != "pending" && c.Phase != "leased" {
+		return nil
+	}
+	t, err := get[Task](tx, "task", r.TaskID)
+	if err != nil {
+		return err
+	}
+	a, err := get[Attempt](tx, "attempt", r.AttemptID)
+	if err != nil {
+		return err
+	}
+	c.Phase, c.Result = "rejected", "请求已过期，节点未获得执行许可"
+	if err := put(tx, "command", c.ID, c.TaskID, c); err != nil {
+		return err
+	}
+	r.Result = "expired"
+	if err := put(tx, "request", r.ID, r.TaskID, *r); err != nil {
+		return err
+	}
+	if t.State == "running" && t.CancelID == "" && value(t.AttemptID) == a.ID && a.EndedAt == nil {
+		if _, err := newCommand(tx, "resolve_tool", &t, &a, map[string]any{"requestId": r.ID, "outcome": "expired"}); err != nil {
+			return err
+		}
+	}
+	return emit(tx, "command_changed", &t, a.ID, map[string]string{"commandId": c.ID, "type": c.Type, "phase": c.Phase, "outcome": r.Result})
+}
+
 func closeRequests(tx *transaction, task, attempt string) error {
 	rs, err := list[Request](tx, "request", task)
 	if err != nil {
@@ -461,15 +520,22 @@ func (s *Server) maintain(tx *transaction) error {
 		return err
 	}
 	for _, r := range rs {
-		if r.Status != "pending" || now().Before(r.ExpiresAt) {
+		if now().Before(r.ExpiresAt) {
 			continue
 		}
-		t, err := get[Task](tx, "task", r.TaskID)
-		if err != nil {
-			return err
-		}
-		if err = settleRequest(tx, &t, &r, Decision{ID: ID(), Outcome: "expired", At: now()}, "expired"); err != nil {
-			return err
+		switch {
+		case r.Status == "pending":
+			t, err := get[Task](tx, "task", r.TaskID)
+			if err != nil {
+				return err
+			}
+			if err := settleRequest(tx, &t, &r, Decision{ID: ID(), Outcome: "expired", At: now()}, "expired"); err != nil {
+				return err
+			}
+		case r.Status == "decided" && r.Result == "":
+			if err := expireUnreceivedDecision(tx, &r); err != nil {
+				return err
+			}
 		}
 	}
 	ts, err := list[Task](tx, "task", "")
@@ -481,29 +547,36 @@ func (s *Server) maintain(tx *transaction) error {
 	if err = tx.QueryRow("SELECT count(*) FROM write_slot WHERE node='local'").Scan(&occupied); err != nil {
 		return err
 	}
+	online := nodeReady(n)
 	for _, t := range ts {
 		if terminal(t.State) || t.State == "draft" {
 			continue
 		}
 		var changed bool
-		if !nodeReady(n) && (t.State == "queued" || t.State == "running" || t.State == "awaiting_review" || t.State == "reviewing") {
+		if !online && (t.State == "queued" || t.State == "running" || t.State == "awaiting_review" || t.State == "reviewing") {
 			changed = block(&t, "node_disconnected", "local", "执行节点失联")
 		} else {
 			changed = unblock(&t, "local")
+		}
+		waitingForExecution := t.State == "queued" && t.AttemptID == nil
+		reason := ""
+		if online && waitingForExecution && t.CancelID == "" {
+			reason = capabilityIssue(n, t)
+		}
+		if reason != "" {
+			changed = block(&t, "capability_unavailable", "execution_capability", reason) || changed
+		} else {
+			changed = unblock(&t, "execution_capability") || changed
 		}
 		if changed {
 			if err = change(tx, &t); err != nil {
 				return err
 			}
 		}
-		if !nodeReady(n) || t.CancelID != "" || len(t.Blockers) > 0 || meta(tx, "pause_dispatch") == "on" {
+		if !online || t.CancelID != "" || len(t.Blockers) > 0 || meta(tx, "pause_dispatch") == "on" {
 			continue
 		}
-		if t.State == "queued" && t.AttemptID == nil && occupied == 0 {
-			compat := checkCombo(n, t)
-			if compat != nil {
-				continue
-			}
+		if waitingForExecution && occupied == 0 {
 			if err = s.dispatch(tx, &t, n, "execution"); err != nil {
 				return err
 			}
