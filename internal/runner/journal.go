@@ -4,11 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"time"
 
 	"nextbot/internal/control"
@@ -95,23 +91,11 @@ func readRows[T any](db *sql.DB, query string) ([]T, error) {
 }
 
 func (j *journal) process(c control.Command, pid int) error {
-	stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	boot, birth, err := processIdentity(pid)
 	if err != nil {
 		return err
 	}
-	end := strings.LastIndexByte(string(stat), ')')
-	if end < 0 {
-		return fmt.Errorf("cannot identify the spawned process")
-	}
-	fields := strings.Fields(string(stat[end+1:]))
-	if len(fields) < 20 {
-		return fmt.Errorf("cannot identify the spawned process")
-	}
-	boot, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
-	if err != nil {
-		return err
-	}
-	_, err = j.db.Exec("INSERT INTO processes(command,pid,boot,birth,observed) VALUES(?,?,?,?,?)", c.ID, pid, strings.TrimSpace(string(boot)), fields[19], time.Now().UTC().Format(time.RFC3339Nano))
+	_, err = j.db.Exec("INSERT INTO processes(command,pid,boot,birth,observed) VALUES(?,?,?,?,?)", c.ID, pid, boot, birth, time.Now().UTC().Format(time.RFC3339Nano))
 	return err
 }
 func (j *journal) processStopped(c control.Command) error {

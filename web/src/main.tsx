@@ -7,6 +7,8 @@ import { TaskForm } from './form'
 import { agentName, Brand, date, Dot, Empty, Loading, MetricIcons, Modal, Notice, RequestGlyph, TaskRow } from './ui'
 import './style.css'
 
+const desktopClient = (window as Window & { nextBotDesktop?: boolean }).nextBotDesktop === true
+
 function currentRoute() {
   const value = location.hash.slice(1)
   return /^(new|settings|inbox|task\/[a-f0-9]{32}|edit\/[a-f0-9]{32})$/.test(value) ? value : ''
@@ -156,7 +158,7 @@ function App() {
 function Bind({ ticket, onSuccess, error, onRetry }: { ticket: { value: string; mode: string }; onSuccess: () => void; error: string; onRetry: () => void }) {
   const [mode, setMode] = useState(ticket.mode)
   const [value, setValue] = useState(ticket.value)
-  const [name, setName] = useState('')
+  const [name, setName] = useState(desktopClient ? 'Mac' : '')
   const [err, setError] = useState('')
   const [busy, setBusy] = useState(false)
   async function submit(event: FormEvent) {
@@ -174,23 +176,23 @@ function Bind({ ticket, onSuccess, error, onRetry }: { ticket: { value: string; 
   return <div className="bind-layout">
     <section className="bind-intro">
       <Brand />
-      <div className="bind-feature"><div className="bind-feature-icon"><Workflow size={31} /></div><h1>在电脑上派单，<br />在手机上继续。</h1><p>跟踪本地 Agent 执行，处理授权，并根据归档证据验收交付。</p></div>
-      <div className="bind-footer"><ShieldCheck size={16} /> 私网实例 · 设备绑定</div>
+      <div className="bind-feature"><div className="bind-feature-icon"><Workflow size={31} /></div><h1>{desktopClient ? <>在这台 Mac 上<br />管理 Agent 任务。</> : <>在电脑上派单，<br />在手机上继续。</>}</h1><p>跟踪本地 Agent 执行，处理授权，并根据归档证据验收交付。</p></div>
+      <div className="bind-footer"><ShieldCheck size={16} /> {desktopClient ? '本机实例 · 设备绑定' : '私网实例 · 设备绑定'}</div>
     </section>
     <section className="bind-main">
       <form className="bind-card" onSubmit={submit}>
         <div className="bind-lock"><Laptop size={24} /></div>
-        <h2>连接你的设备</h2>
-        <p>使用安装主机签发的认领票据，或使用可信设备生成的配对凭据。</p>
-        <div className="segmented" aria-label="绑定方式">
+        <h2>{desktopClient ? '设置这台 Mac' : '连接你的设备'}</h2>
+        <p>{desktopClient ? (value ? '确认设备名称，开始使用本机控制台。' : '请从「工作区」菜单重新绑定这台 Mac。') : '使用安装主机签发的认领票据，或使用可信设备生成的配对凭据。'}</p>
+        {!desktopClient && <div className="segmented" aria-label="绑定方式">
           <button type="button" className={mode === 'claim' ? 'selected' : ''} onClick={() => setMode('claim')}>所有者认领</button>
           <button type="button" className={mode === 'pair' ? 'selected' : ''} onClick={() => setMode('pair')}>设备配对</button>
-        </div>
+        </div>}
         <label>设备名称<input autoComplete="off" required maxLength={100} value={name} onChange={event => setName(event.target.value)} placeholder="例如，办公室电脑" /></label>
-        <label>{mode === 'claim' ? '认领票据' : '配对凭据'}<input type="password" autoComplete="off" required value={value} onChange={event => setValue(event.target.value)} placeholder="输入一次性凭据" /></label>
+        {!desktopClient && <label>{mode === 'claim' ? '认领票据' : '配对凭据'}<input type="password" autoComplete="off" required value={value} onChange={event => setValue(event.target.value)} placeholder="输入一次性凭据" /></label>}
         {(err || error) && <Notice danger>{err || error}</Notice>}
-        <button className="button primary full" disabled={busy}>{busy ? '正在绑定…' : '绑定此设备'}<ArrowRight size={17} /></button>
-        {mode === 'claim' && <div className="bind-help"><Command size={14} /> 安装主机执行 <code>nextbot claim</code></div>}
+        <button className="button primary full" disabled={busy || (desktopClient && !value)}>{busy ? '正在绑定…' : (desktopClient ? '开始使用' : '绑定此设备')}<ArrowRight size={17} /></button>
+        {!desktopClient && mode === 'claim' && <div className="bind-help"><Command size={14} /> 安装主机执行 <code>nextbot claim</code></div>}
         {error && <button type="button" className="button quiet" onClick={onRetry}>重新连接</button>}
       </form>
     </section>
@@ -280,7 +282,7 @@ function SettingsPage({ session, snapshot, refresh, signOut }: { session: Sessio
       {snapshot.projects.length === 0 ? <Empty title="尚未登记仓库"><code>nextbot project-add --repo /path/to/repo</code></Empty> : <div className="settings-body">{snapshot.projects.map(project => <div className="settings-item" key={project.projectId}><GitBranch size={18} /><div><strong>{project.name}</strong><span>{project.tests?.length ?? 0} 项登记测试</span></div></div>)}</div>}
     </section>
     <section className="panel">
-      <div className="panel-heading"><div><h2>可信设备</h2><span>撤销设备后，现有会话将失效。</span></div><button className="button secondary" disabled={busy} onClick={() => void action(async () => { setCopied(false); setPair(await mutate('pairings', {}, session)) })}><Plus size={17} /> 配对设备</button></div>
+      <div className="panel-heading"><div><h2>可信设备</h2><span>撤销设备后，现有会话将失效。</span></div>{!desktopClient && <button className="button secondary" disabled={busy} onClick={() => void action(async () => { setCopied(false); setPair(await mutate('pairings', {}, session)) })}><Plus size={17} /> 配对设备</button>}</div>
       {devices ? <div className="settings-body">{devices.map(device => <div className="settings-item" key={device.deviceId}>
         {device.isCurrent ? <Monitor size={19} /> : <Smartphone size={19} />}<div><strong>{device.deviceName}</strong><span>绑定于 {date(device.boundAt)}</span></div>
         {device.isCurrent && <span className="mini success">当前设备</span>}

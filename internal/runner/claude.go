@@ -37,7 +37,7 @@ func (r *Runner) runClaude(serverCtx context.Context, a *activeAttempt, c contro
 	permission := []string{}
 	if execution {
 		var closeBridge func()
-		config, closeBridge, err = r.startBridge(scratch, a, c)
+		config, closeBridge, err = r.startBridge(a, c)
 		if err != nil {
 			return "", false, true, err
 		}
@@ -83,14 +83,19 @@ type toolCall struct {
 	Arguments map[string]any `json:"arguments"`
 }
 
-func (r *Runner) startBridge(dir string, a *activeAttempt, c control.Command) (string, func(), error) {
+func (r *Runner) startBridge(a *activeAttempt, c control.Command) (string, func(), error) {
 	bin, err := os.Executable()
+	if err != nil {
+		return "", nil, err
+	}
+	dir, err := os.MkdirTemp("/tmp", "nextbot-tools-")
 	if err != nil {
 		return "", nil, err
 	}
 	socket := filepath.Join(dir, "tools.sock")
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Net: "unix", Name: socket})
 	if err != nil {
+		_ = os.RemoveAll(dir)
 		return "", nil, err
 	}
 	bearer := control.ID() + control.ID()
@@ -129,15 +134,19 @@ func (r *Runner) startBridge(dir string, a *activeAttempt, c control.Command) (s
 		w.WriteHeader(204)
 	}))
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 3 * time.Second}
+	closeBridge := func() {
+		_ = server.Close()
+		_ = os.RemoveAll(dir)
+	}
 	go func() { _ = server.Serve(listener) }()
 	config, err := json.Marshal(map[string]any{"mcpServers": map[string]any{
 		"nextbot": map[string]any{"command": bin, "args": []string{"tool-bridge", "--socket", socket}, "env": map[string]string{"NEXTBOT_MCP_TOKEN": bearer}},
 	}})
 	if err != nil {
-		_ = server.Close()
+		closeBridge()
 		return "", nil, err
 	}
-	return string(config), func() { _ = server.Close() }, nil
+	return string(config), closeBridge, nil
 }
 
 // ServeBridge connects a single Claude stdio MCP session to its scoped Runner socket.

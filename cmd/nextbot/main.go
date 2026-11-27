@@ -33,10 +33,12 @@ func main() {
 }
 func run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: nextbot control|runner|claim|recover-owner|project-add|backup|verify-backup|restore|pause|resume|reconcile")
+		return fmt.Errorf("usage: nextbot desktop|control|runner|claim|recover-owner|project-add|backup|verify-backup|restore|pause|resume|reconcile")
 	}
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	switch args[0] {
+	case "desktop":
+		return desktop(ctx, fs, args[1:], os.Stdout)
 	case "control":
 		dir := fs.String("data", ".nextbot/control", "control state directory")
 		socket := fs.String("socket", ".nextbot/runner.sock", "private Runner socket")
@@ -49,7 +51,7 @@ func run(ctx context.Context, args []string) error {
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		return serve(ctx, *dir, *socket, *addr, *origin, *history, *dev, uint32(*uid), *gid)
+		return serve(ctx, *dir, *socket, *addr, *origin, *history, *dev, uint32(*uid), *gid, nil)
 	case "runner":
 		dir := fs.String("data", ".nextbot/runner", "local Runner state directory")
 		socket := fs.String("socket", ".nextbot/runner.sock", "private Control socket")
@@ -225,9 +227,11 @@ func addProject(ctx context.Context, s *control.Store, name, repo, testFile stri
 	}
 	return printJSON(p)
 }
-func serve(ctx context.Context, dir, socket, addr, origin string, history int, dev bool, uid uint32, gid int) error {
-	if err := control.ValidateOrigin(origin, dev); err != nil {
-		return err
+func serve(ctx context.Context, dir, socket, addr, origin string, history int, dev bool, uid uint32, gid int, ready func(*control.Store, string) error) error {
+	if ready == nil || origin != "" {
+		if err := control.ValidateOrigin(origin, dev); err != nil {
+			return err
+		}
 	}
 	if history < 1 {
 		return fmt.Errorf("event window must be positive")
@@ -255,12 +259,15 @@ func serve(ctx context.Context, dir, socket, addr, origin string, history int, d
 		return err
 	}
 	defer store.DB.Close()
-	s := &control.Server{Store: store, Origin: origin, AllowHTTP: dev && strings.HasPrefix(origin, "http:"), History: history}
 	outer, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
 	defer outer.Close()
+	if origin == "" {
+		origin = "http://" + outer.Addr().String()
+	}
+	s := &control.Server{Store: store, Origin: origin, AllowHTTP: dev && strings.HasPrefix(origin, "http:"), History: history}
 	if err = os.MkdirAll(filepath.Dir(socket), 0700); err != nil {
 		return err
 	}
@@ -305,6 +312,13 @@ func serve(ctx context.Context, dir, socket, addr, origin string, history int, d
 	result := make(chan error, 2)
 	go func() { result <- public.Serve(outer) }()
 	go func() { result <- internal.Serve(peerListener{inner, uid}) }()
+	defer public.Close()
+	defer internal.Close()
+	if ready != nil {
+		if err := ready(store, origin); err != nil {
+			return err
+		}
+	}
 	log.Printf("NextBot listening on %s for %s", outer.Addr(), origin)
 	select {
 	case <-ctx.Done():
@@ -333,17 +347,17 @@ func (l peerListener) Accept() (net.Conn, error) {
 			return nil, err
 		}
 		raw, err := conn.SyscallConn()
-		var credential *syscall.Ucred
+		var uid uint32
 		if err == nil {
 			var socketErr error
 			err = raw.Control(func(fd uintptr) {
-				credential, socketErr = syscall.GetsockoptUcred(int(fd), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
+				uid, socketErr = peerUID(int(fd))
 			})
 			if err == nil {
 				err = socketErr
 			}
 		}
-		if err == nil && credential != nil && credential.Uid == l.uid {
+		if err == nil && uid == l.uid {
 			return conn, nil
 		}
 		_ = conn.Close()

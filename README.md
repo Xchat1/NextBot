@@ -1,8 +1,18 @@
 # NextBot
 
-NextBot 面向自托管的多 Agent 编排与跨端控制。首个使用场景是在电脑上派发仓库任务，从手机处理授权、查看证据并验收当前版本。当前实现提供单机 Control、Runner 和同源响应式 Web 控制台。
+NextBot 面向自托管的多 Agent 编排与跨端控制。第一步是在 Mac 桌面应用内完成本机仓库的派单、执行、查看差异和验收。后续依次验证手机接手和云端部署。
 
-## 构建与启动
+## Mac 桌面应用
+
+在装有 Xcode 命令行工具、Go 1.25+ 和 Node.js 22.12+ 的 Mac 上运行 `make mac-app`，然后打开 `bin/NextBot.app`。应用会启动本机 Control 与 Runner，控制台只监听 Mac 的回环地址。
+
+1. 首次打开时为这台 Mac 命名并绑定设备。
+2. 从工具栏选择**添加仓库**，登记一个本机 Git 仓库。任务会使用独立的 Git worktree。
+3. 使用 Codex 执行时，CLI 需已安装并登录。在**Codex 设置**填写登录目录与已验证的完整版本。保存后等节点就绪，再新建任务。
+
+关闭窗口后任务继续运行。退出 NextBot 或更改 Codex 设置会停止本机服务。任务和日志保存在 `~/Library/Application Support/NextBot`。此桌面版本先覆盖本机文件执行，受管容器测试继续使用 Linux 的部署路径。
+
+## Linux 构建与启动
 
 构建需要 Linux、Go 1.25+、C 编译器和 Node.js 22.12+。发行二进制内嵌 Web 资源，执行主机另需 Git 和所选执行器。SQLite 使用随驱动构建的 SQLite 引擎。当前采用 `mattn/go-sqlite3`，工程稿所列的 `modernc.org/sqlite` 下载源在本次开发环境中不可访问。
 

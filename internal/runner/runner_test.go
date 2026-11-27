@@ -126,13 +126,16 @@ func TestClaudeToolBridgeUsesScopedWorkspace(t *testing.T) {
 	ctx := context.Background()
 	r := &Runner{}
 	a := &activeAttempt{ctx: ctx, workspace: &workspace{Path: dir, Root: root}}
-	config, closeBridge, err := r.startBridge(dir, a, control.Command{})
+	config, closeBridge, err := r.startBridge(a, control.Command{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer closeBridge()
 	var parsed struct {
-		Servers map[string]struct{ Env map[string]string } `json:"mcpServers"`
+		Servers map[string]struct {
+			Args []string
+			Env  map[string]string
+		} `json:"mcpServers"`
 	}
 	if err = json.Unmarshal([]byte(config), &parsed); err != nil {
 		t.Fatal(err)
@@ -145,7 +148,11 @@ func TestClaudeToolBridgeUsesScopedWorkspace(t *testing.T) {
 		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"shell","arguments":{}}}`,
 	}, "\n")
 	var out bytes.Buffer
-	if err = ServeBridge(ctx, filepath.Join(dir, "tools.sock"), parsed.Servers["nextbot"].Env["NEXTBOT_MCP_TOKEN"], strings.NewReader(input), &out); err != nil {
+	bridge := parsed.Servers["nextbot"]
+	if len(bridge.Args) != 3 {
+		t.Fatalf("invalid tool bridge arguments: %v", bridge.Args)
+	}
+	if err = ServeBridge(ctx, bridge.Args[2], bridge.Env["NEXTBOT_MCP_TOKEN"], strings.NewReader(input), &out); err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")

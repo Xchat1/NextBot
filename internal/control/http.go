@@ -214,6 +214,9 @@ func addSecret(tx *transaction, kind, raw, subject string, expiry time.Time) err
 	_, err := tx.Exec("INSERT INTO secrets VALUES(?,?,?,?)", kind, Hash([]byte(raw)), subject, expiry.Unix())
 	return err
 }
+
+var ErrOwnerClaimed = errors.New("owner already claimed; use the local recover-owner command if needed")
+
 func (s *Store) OwnerTicket(recover bool) (string, error) {
 	raw := token()
 	err := s.Tx(func(tx *transaction) error {
@@ -222,7 +225,7 @@ func (s *Store) OwnerTicket(recover bool) (string, error) {
 			return err
 		}
 		if len(devices) > 0 && !recover {
-			return fmt.Errorf("owner already claimed; use the local recover-owner command if needed")
+			return ErrOwnerClaimed
 		}
 		if recover {
 			for _, d := range devices {

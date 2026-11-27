@@ -434,7 +434,7 @@ func process(ctx context.Context, path, dir string, args, env []string) *exec.Cm
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Dir = dir
 	cmd.Env = env
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGKILL}
+	cmd.SysProcAttr = processAttributes()
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = 3 * time.Second
 	return cmd
