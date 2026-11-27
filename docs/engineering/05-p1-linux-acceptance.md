@@ -33,7 +33,7 @@
 
 ### 2.1 前置环境
 
-> 本节的受管容器验收需要 Linux 主机或 Linux VM。Mac 桌面应用可运行本机文件任务，参见 [私网部署与维护](06-private-deployment.md)。
+> 本节的受管容器验收需要 Linux 主机或 Linux VM。Mac 桌面应用可运行本机文件任务，参见 [私网部署与维护](07-private-deployment.md)。
 
 - **OS**：Linux（首选 `x86_64`；`aarch64` 如 Lima/Colima VM 需单独标注架构）
 - **工具链**：Go 1.25+、GCC / libc6-dev（`mattn/go-sqlite3` CGO 编译）、Node.js 22.12+、Git、Python 3、SQLite CLI

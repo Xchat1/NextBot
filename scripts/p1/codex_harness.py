@@ -199,6 +199,9 @@ def main() -> int:
             return 1
         print("Logged in using ChatGPT")
         return 0
+    if args[-3:] == ["mcp", "list", "--json"]:
+        print("[]")
+        return 0
     if "app-server" in args:
         return run_app_server()
     print(f"unsupported harness arguments: {args}", file=sys.stderr)

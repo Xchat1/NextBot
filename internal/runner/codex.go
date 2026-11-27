@@ -10,11 +10,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"nextbot/internal/control"
 )
+
+var errCodexMCPPolicy = errors.New("无法确认 Codex 的 MCP 隔离，请使用专用的 Codex 登录目录")
+var codexMCPName = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 type rpcMessage struct {
 	ID     json.RawMessage `json:"id,omitempty"`
@@ -141,6 +145,9 @@ func (r *Runner) probe(ctx context.Context) map[string]control.Capabilities {
 			}
 			if err != nil {
 				c.Reason = "Codex 受限协议握手失败"
+				if errors.Is(err, errCodexMCPPolicy) {
+					c.Reason = err.Error()
+				}
 				out[spec.name] = c
 				continue
 			}
@@ -154,13 +161,74 @@ func (r *Runner) probe(ctx context.Context) map[string]control.Capabilities {
 	}
 	return out
 }
+
+type codexMCPServer struct {
+	Name    string `json:"name"`
+	Enabled *bool  `json:"enabled"`
+}
+
+func listCodexMCP(ctx context.Context, path, dir string, args, env []string) ([]codexMCPServer, error) {
+	cmd := process(ctx, path, dir, append(append([]string{}, args...), "mcp", "list", "--json"), env)
+	out := &limitedBuffer{limit: 1 << 20}
+	cmd.Stdout = out
+	var servers []codexMCPServer
+	if err := cmd.Run(); err != nil || out.total > out.limit ||
+		json.Unmarshal([]byte(out.String()), &servers) != nil || servers == nil {
+		return nil, errCodexMCPPolicy
+	}
+	for _, server := range servers {
+		if server.Enabled == nil || !codexMCPName.MatchString(server.Name) {
+			return nil, errCodexMCPPolicy
+		}
+	}
+	return servers, nil
+}
+
+func codexMCPOverrides(ctx context.Context, path, dir string, args, env []string) ([]string, error) {
+	servers, err := listCodexMCP(ctx, path, dir, args, env)
+	if err != nil {
+		return nil, err
+	}
+	var overrides []string
+	for _, server := range servers {
+		if *server.Enabled {
+			overrides = append(overrides, "-c", "mcp_servers."+server.Name+".enabled=false")
+		}
+	}
+	if len(overrides) == 0 {
+		return args, nil
+	}
+	restricted := append(args, overrides...)
+	servers, err = listCodexMCP(ctx, path, dir, restricted, env)
+	if err != nil {
+		return nil, err
+	}
+	for _, server := range servers {
+		if *server.Enabled {
+			return nil, errCodexMCPPolicy
+		}
+	}
+	return restricted, nil
+}
+
 func (r *Runner) codex(ctx context.Context, dir string) (*exec.Cmd, *rpc, *limitedBuffer, error) {
 	path, err := exec.LookPath("codex")
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	args := []string{"--disable", "shell_tool", "--disable", "unified_exec", "--disable", "multi_agent", "--disable", "exec_permission_approvals", "--disable", "apps", "-c", "web_search=\"disabled\"", "-c", "mcp_servers={}", "app-server", "--listen", "stdio://"}
-	cmd := process(ctx, path, dir, args, providerEnv("CODEX_HOME", r.cfg.CodexHome))
+	args := []string{
+		"--disable", "shell_tool", "--disable", "unified_exec", "--disable", "multi_agent",
+		"--disable", "exec_permission_approvals", "--disable", "apps", "--disable", "plugins",
+		"--disable", "hooks", "-c", "web_search=\"disabled\"",
+	}
+	env := providerEnv("CODEX_HOME", r.cfg.CodexHome)
+	probe, cancel := context.WithTimeout(ctx, 5*time.Second)
+	args, err = codexMCPOverrides(probe, path, dir, args, env)
+	cancel()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	cmd := process(ctx, path, dir, append(args, "app-server", "--listen", "stdio://"), env)
 	log := &limitedBuffer{limit: 8192}
 	cmd.Stderr = log
 	in, err := cmd.StdinPipe()

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -13,6 +14,29 @@ import (
 
 	"nextbot/internal/control"
 )
+
+func TestCodexMCPOverrides(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "codex")
+	const fake = `#!/bin/sh
+case " $* " in
+  *" refuse_override "*) printf '%s\n' '[{"name":"personal-mcp","enabled":true}]' ;;
+  *" mcp_servers.personal-mcp.enabled=false "*) printf '%s\n' '[{"name":"personal-mcp","enabled":false}]' ;;
+  *) printf '%s\n' '[{"name":"personal-mcp","enabled":true},{"name":"already_off","enabled":false}]' ;;
+esac
+`
+	if err := os.WriteFile(path, []byte(fake), 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	args, err := codexMCPOverrides(ctx, path, dir, []string{"--disable", "hooks"}, nil)
+	if err != nil || strings.Join(args, " ") != "--disable hooks -c mcp_servers.personal-mcp.enabled=false" {
+		t.Fatalf("unexpected restricted args %v: %v", args, err)
+	}
+	if _, err := codexMCPOverrides(ctx, path, dir, []string{"refuse_override"}, nil); !errors.Is(err, errCodexMCPPolicy) {
+		t.Fatalf("CLI ignored the override but launch was allowed: %v", err)
+	}
+}
 
 func TestWorkspaceBoundariesAndDiff(t *testing.T) {
 	ctx := context.Background()

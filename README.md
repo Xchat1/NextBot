@@ -27,7 +27,7 @@ make build
 make test
 ```
 
-长期运行请使用仓库提供的 [Linux 用户服务与私网部署说明](docs/engineering/06-private-deployment.md)，包含 systemd 单元、配置模板和恢复步骤。
+长期运行请使用仓库提供的 [Linux 用户服务与私网部署说明](docs/engineering/07-private-deployment.md)，包含 systemd 单元、配置模板和恢复步骤。
 
 在两个独立终端启动 Control 与 Runner。以下命令使用默认数据目录和 Unix 套接字。
 
@@ -71,7 +71,7 @@ bin/nextbot project-add --name "报告服务" --repo /path/to/repository
 ]
 ```
 
-准备一个可写的专用 Codex 登录目录。在合成仓库上按 G1–G3 验证文件编辑、终端限制、授权和取消后，启动 Runner 时传入 `--verified-codex-version`，值为 `codex --version` 的完整输出。节点还会检查登录和 stdio 握手。受管测试需要配置已验证的 rootless Podman 或 Docker，并传入 `--enable-managed-tests`。使用 Docker 时同时传入 `--container-engine docker`。
+准备一个可写的专用 Codex 登录目录。在合成仓库上按 G1–G3 验证文件编辑、终端限制、授权和取消后，启动 Runner 时传入 `--verified-codex-version`，值为 `codex --version` 的完整输出。节点检查登录和 stdio 握手，并在启动 Codex 前重新核对 MCP 禁用状态。受管测试需要配置已验证的 rootless Podman 或 Docker，并传入 `--enable-managed-tests`。使用 Docker 时同时传入 `--container-engine docker`。
 
 启用 P2 路径需在执行主机安装并登录 Claude Code，验证无工具的一次性只读配置，然后传入 `--claude-home` 与 `--verified-claude-version`。Mac 可在 **Agent 设置**要求独立复核，Linux Control 可传入 `--require-review`。此策略适用于新提交的任务。复核读取指定产物版本的归档内容，验收要求当前版本的通过结论。反向组合使用同一套验证用例，通过后可用 `--verified-claude-execution-version` 和 `--verified-codex-review-version` 再开放。
 
@@ -91,7 +91,8 @@ bin/nextbot project-add --name "报告服务" --repo /path/to/repository
 | [持久化与故障恢复](docs/engineering/03-data-recovery.md) | 任务、产物、审批存在哪里，断线、重启和重放时如何核对结果 |
 | [P1 开发任务与验收计划](docs/engineering/04-p1-delivery.md) | 各项工作依赖什么，哪些证据齐全后可以进入内部试用 |
 | [P1 Linux 验收](docs/engineering/05-p1-linux-acceptance.md) | 如何复验容器测试、双端交接和故障恢复 |
-| [私网部署与维护](docs/engineering/06-private-deployment.md) | 如何启用 Mac 手机接手并在 Linux 持续运行 |
+| [P1 原始验收记录](docs/engineering/06-p1-validation-report.md) | Gemini 在 Linux ARM64 上执行的原始场景及结果 |
+| [私网部署与维护](docs/engineering/07-private-deployment.md) | 如何启用 Mac 手机接手并在 Linux 持续运行 |
 
 ## 产品依据
 

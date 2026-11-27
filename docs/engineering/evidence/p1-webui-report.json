@@ -1,0 +1,56 @@
+{
+  "status": "PASS",
+  "taskId": "e53eee70c360b942fd4af3b2acca20e2",
+  "denyTaskId": "a7b04ed9bf40264ae866381b267ede9e",
+  "origin": "http://127.0.0.1:18787",
+  "layoutChecks": [
+    {
+      "view": "desktop-dashboard",
+      "innerWidth": 1280,
+      "scrollWidth": 1280,
+      "bodyTextLen": 172
+    },
+    {
+      "view": "mobile-dashboard-390",
+      "innerWidth": 390,
+      "scrollWidth": 390,
+      "bodyTextLen": 147
+    },
+    {
+      "view": "mobile-dashboard-375",
+      "innerWidth": 375,
+      "scrollWidth": 375,
+      "bodyTextLen": 147
+    },
+    {
+      "view": "mobile-inbox",
+      "innerWidth": 390,
+      "scrollWidth": 390,
+      "bodyTextLen": 102
+    },
+    {
+      "view": "mobile-approval",
+      "innerWidth": 390,
+      "scrollWidth": 390,
+      "bodyTextLen": 521
+    },
+    {
+      "view": "mobile-artifact-tab",
+      "innerWidth": 390,
+      "scrollWidth": 390,
+      "bodyTextLen": 421
+    },
+    {
+      "view": "mobile-completed",
+      "innerWidth": 390,
+      "scrollWidth": 390,
+      "bodyTextLen": 763
+    },
+    {
+      "view": "desktop-completed",
+      "innerWidth": 1280,
+      "scrollWidth": 1280,
+      "bodyTextLen": 427
+    }
+  ]
+}
