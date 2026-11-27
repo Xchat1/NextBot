@@ -20,7 +20,7 @@ install -m 644 deploy/linux/*.service "$HOME/.config/systemd/user/"
 install -m 600 deploy/linux/nextbot.env.example "$HOME/.config/nextbot/nextbot.env"
 ```
 
-修改 `nextbot.env` 中的 HTTPS 来源、登录目录及经验证的 CLI 完整版本。值包含空格时可用双引号，目录使用绝对路径。默认要求新任务由独立 Agent 复核。启用受管测试前，确认此账号可运行 rootless Podman 或 Docker，再将 `NEXTBOT_MANAGED_TESTS` 设为 `true`。专用账号的 Git 工作区、模型凭据和 Runner 状态均由该账号管理。
+修改 `nextbot.env` 中的 HTTPS 来源、Codex 登录目录及经验证的 CLI 完整版本。值包含空格时可用双引号，目录使用绝对路径。默认使用 Codex 执行，产物可直接进入人工验收。配置并验证第二个 Agent 后，可将 `NEXTBOT_REQUIRE_REVIEW` 设为 `true`。启用受管测试前，确认此账号可运行 rootless Podman 或 Docker，再将 `NEXTBOT_MANAGED_TESTS` 设为 `true`。专用账号的 Git 工作区、模型凭据和 Runner 状态均由该账号管理。
 
 ```sh
 systemctl --user daemon-reload
@@ -46,7 +46,7 @@ STATE="${XDG_STATE_HOME:-$HOME/.local/state}/nextbot/control"
 "$HOME/.local/bin/nextbot" project-add --data "$STATE" --repo /path/to/repository
 ```
 
-在桌面打开认领命令返回的链接。检查 HTTPS 的 `/healthz` 返回成功，设置页显示节点在线，并用一个测试仓库演练派单、独立复核和手机签收。
+在桌面打开认领命令返回的链接。检查 HTTPS 的 `/healthz` 返回成功，设置页显示节点在线，并用一个测试仓库演练 Codex 派单、查看证据和手机签收。启用独立复核的实例另验一次复核和返工。
 
 ### 维护与恢复
 

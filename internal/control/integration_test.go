@@ -158,6 +158,17 @@ func TestOwnerWorkflow(t *testing.T) {
 	desktop.call(t, "POST", "owner/claim", ID(), input{"ticket": ticket, "deviceName": "Desktop"}, 201)
 	mobile.call(t, "POST", "owner/claim", ID(), input{"ticket": ticket, "deviceName": "Foreign"}, 403)
 	desktop.session(t)
+	current := parse[snapshot](t, desktop.call(t, "GET", "snapshot", "", nil, 200))
+	events, err := desktop.client.Get(public.URL + "/api/v1/events?streamId=" + current.Stream + "&afterSeq=" + current.HighWater)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := make([]byte, len(": ready\n\n"))
+	_, readErr := io.ReadFull(events.Body, ready)
+	events.Body.Close()
+	if events.StatusCode != http.StatusOK || readErr != nil || string(ready) != ": ready\n\n" {
+		t.Fatalf("idle stream did not flush its first frame: status=%d error=%v frame=%q", events.StatusCode, readErr, ready)
+	}
 	pair := parse[input](t, desktop.call(t, "POST", "pairings", ID(), input{}, 201))
 	mobile.call(t, "POST", "pairings/claim", ID(), input{"token": pair["token"], "deviceName": "Phone"}, 201)
 	newBrowser(t, public.URL).call(t, "POST", "pairings/claim", ID(), input{"token": pair["token"], "deviceName": "Additional"}, 403)

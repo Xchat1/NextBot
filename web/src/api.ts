@@ -131,7 +131,8 @@ export async function followEvents(
     if (!response.body) throw new Error('事件流不可用')
     onReady()
     resetIdle()
-    const reader = response.body.pipeThrough(new TextDecoderStream()).getReader()
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
     let buffer = ''
     let position = BigInt(after)
     try {
@@ -140,7 +141,7 @@ export async function followEvents(
         if (done) break
         onActivity?.()
         resetIdle()
-        buffer += value
+        buffer += decoder.decode(value, { stream: true })
         let boundary = buffer.indexOf('\n\n')
         while (boundary >= 0) {
           const frame = buffer.slice(0, boundary)
