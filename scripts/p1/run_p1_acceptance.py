@@ -148,11 +148,14 @@ def read_sse_until(resp: http.client.HTTPResponse, stop_fn, timeout_s: float = 1
     buf = ""
     closed = False
     while time.monotonic() < deadline:
-        chunk = resp.fp.readline()
+        try:
+            chunk = resp.readline()
+        except (TimeoutError, socket.timeout):
+            break
         if not chunk:
             closed = True
             break
-        line = chunk.decode("utf-8", "replace")
+        line = chunk.decode("utf-8", "replace").replace("\r\n", "\n")
         buf += line
         if buf.endswith("\n\n"):
             frame = buf[:-2]
@@ -672,6 +675,21 @@ def run_suite(args: argparse.Namespace) -> dict:
             and next((r for r in d.get("requests", []) if r["kind"] == "action_approval" and r["status"] == "pending"), None),
             timeout_s=30.0,
         )
+        rev_s2 = phone.must("GET", f"tasks/{task2['taskId']}", 200).json["revision"]
+        tampered = phone.request(
+            "POST",
+            f"requests/{req2['requestId']}/decide",
+            {
+                "taskId": task2["taskId"],
+                "attemptId": req2["attemptId"],
+                "expectedRevision": rev_s2,
+                "inputDigest": "sha256:" + ("0" * 64),
+                "outcome": "allow_once",
+            },
+        )
+        assert tampered.status == 409 and tampered.error_code() == "stale_target", (
+            f"expected 409 stale_target on mismatched inputDigest, got {tampered.status} {tampered.raw}"
+        )
         phone.must(
             "POST",
             f"requests/{req2['requestId']}/decide",
@@ -679,7 +697,7 @@ def run_suite(args: argparse.Namespace) -> dict:
             {
                 "taskId": task2["taskId"],
                 "attemptId": req2["attemptId"],
-                "expectedRevision": phone.must("GET", f"tasks/{task2['taskId']}", 200).json["revision"],
+                "expectedRevision": rev_s2,
                 "inputDigest": req2["frozenInput"]["inputDigest"],
                 "outcome": "deny",
             },

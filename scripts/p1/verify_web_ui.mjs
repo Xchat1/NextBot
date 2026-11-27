@@ -97,6 +97,9 @@ async function launchChrome(chromePath, userDataDir, url) {
     '--headless=new',
     '--no-sandbox',
     '--disable-gpu',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-session-crashed-bubble',
     '--remote-debugging-port=0',
     `--user-data-dir=${userDataDir}`,
     url,
@@ -124,7 +127,7 @@ async function launchChrome(chromePath, userDataDir, url) {
   const targets = await waitFor('page target', async () => {
     const res = await fetch(`http://127.0.0.1:${port}/json/list`)
     const list = await res.json()
-    return list.find(t => t.type === 'page')
+    return list.find(t => t.type === 'page' && t.url && t.url.startsWith('http')) || list.find(t => t.type === 'page')
   }, 10000, 150)
 
   const cdp = new CDPClient(targets.webSocketDebuggerUrl)
@@ -135,12 +138,15 @@ async function launchChrome(chromePath, userDataDir, url) {
 
 async function stopChrome(instance) {
   if (!instance) return
+  try { await instance.cdp.call('Browser.close') } catch {}
   try { await instance.cdp.close() } catch {}
-  if (!instance.proc.killed) {
-    instance.proc.kill('SIGTERM')
+  if (!instance.proc.killed && instance.proc.exitCode === null) {
     await new Promise(resolve => {
-      instance.proc.once('exit', resolve)
-      setTimeout(() => { instance.proc.kill('SIGKILL'); resolve() }, 3000)
+      const timer = setTimeout(() => {
+        try { instance.proc.kill('SIGTERM') } catch {}
+        setTimeout(() => { try { instance.proc.kill('SIGKILL') } catch {}; resolve() }, 2000)
+      }, 2500)
+      instance.proc.once('exit', () => { clearTimeout(timer); resolve() })
     })
   }
 }
@@ -212,14 +218,18 @@ async function main() {
     const pairUrl = await waitFor('pairing URL in modal', () => desktop.cdp.eval(`document.querySelector('input[readonly]')?.value || ''`))
     if (!pairUrl.includes('#pair=')) throw new Error(`Unexpected pairUrl: ${pairUrl}`)
 
-    // 3. Mobile (390x844) claims pairing
+    // 3. Mobile (390x844, plus 375x667 narrow check) claims pairing
     mobile = await launchChrome(args.chrome, mobileDir, pairUrl)
+    await mobile.cdp.call('Network.enable')
     await mobile.cdp.call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true })
     await waitFor('mobile bind form', () => mobile.cdp.eval(`!!document.querySelector('input[placeholder="例如，办公室电脑"]')`))
     await setReactValue(mobile.cdp, 'input[placeholder="例如，办公室电脑"]', 'iPhone Viewport')
     await clickByText(mobile.cdp, 'button.primary', '绑定此设备')
     await waitFor('mobile realtime sync', () => mobile.cdp.eval(`document.body.innerText.includes('实时同步')`))
-    layoutChecks.push({ view: 'mobile-dashboard', ...(await checkViewportFit(mobile.cdp, 'mobile-dashboard')) })
+    layoutChecks.push({ view: 'mobile-dashboard-390', ...(await checkViewportFit(mobile.cdp, 'mobile-dashboard-390')) })
+    await mobile.cdp.call('Emulation.setDeviceMetricsOverride', { width: 375, height: 667, deviceScaleFactor: 2, mobile: true })
+    layoutChecks.push({ view: 'mobile-dashboard-375', ...(await checkViewportFit(mobile.cdp, 'mobile-dashboard-375')) })
+    await mobile.cdp.call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true })
 
     // 4. Desktop creates and submits demo task, then closes page
     await desktop.cdp.eval(`location.hash = 'new'`)
@@ -281,12 +291,66 @@ async function main() {
     `))
     layoutChecks.push({ view: 'desktop-completed', ...(await checkViewportFit(desktop.cdp, 'desktop-completed')) })
 
-    const out = { status: 'PASS', taskId, origin: args.origin, layoutChecks }
+    // 7. Mobile offline + Desktop submits Deny-test task -> Mobile reconnects -> Mobile denies -> accept disabled
+    await mobile.cdp.call('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
+    await waitFor('mobile detects offline', () => mobile.cdp.eval(`document.body.innerText.includes('正在连接')`), 10000)
+
+    await desktop.cdp.eval(`location.hash = 'new'`)
+    await waitFor('new task form for deny', () => desktop.cdp.eval(`!!document.querySelector('select[aria-label="项目仓库"]')?.value`))
+    await setReactValue(desktop.cdp, 'input[placeholder="例如，修复报告导出失败"]', '空数据导出拒绝授权验证')
+    await setReactValue(desktop.cdp, 'textarea[placeholder="需要交付什么？"]', '验证手机离线重连后在窄屏拒绝授权并阻断无证据验收。')
+    await setReactValue(desktop.cdp, 'textarea[placeholder="哪些目录、文件或行为可以改动？"]', 'src/export_report.sh')
+    await setReactValue(desktop.cdp, 'textarea[placeholder="用哪些证据判断任务完成？"]', '拒绝后不得启动容器且不能验收。')
+    await clickByText(desktop.cdp, 'button', '解析 Git 基准')
+    await waitFor('resolved commit deny', () => desktop.cdp.eval(`!!document.querySelector('.commit-confirm code')?.textContent?.trim()`))
+    await setReactValue(desktop.cdp, 'select[aria-label="受管测试"]', 'export-check')
+    await desktop.cdp.eval(`(() => { const cb = document.querySelector('input[type="checkbox"]'); if (cb && !cb.checked) cb.click(); })()`)
+    await waitFor('submit enabled deny', () => desktop.cdp.eval(`!Array.from(document.querySelectorAll('button[type="submit"]')).find(b => b.textContent.includes('提交并排队'))?.disabled`))
+    await clickByText(desktop.cdp, 'button[type="submit"]', '提交并排队')
+    const denyHash = await waitFor('navigated to deny #task/', () => desktop.cdp.eval(`location.hash.startsWith('#task/') && location.hash !== '#task/${taskId}' ? location.hash : ''`))
+    const denyTaskId = denyHash.replace('#task/', '')
+
+    // Mobile reconnects and sees the new pending approval in Inbox
+    await mobile.cdp.call('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
+    await waitFor('mobile reconnected realtime sync', () => mobile.cdp.eval(`document.body.innerText.includes('实时同步')`), 15000)
+    await mobile.cdp.eval(`location.hash = 'task/${denyTaskId}'`)
+    await waitFor('mobile sees deny pending approval', () => mobile.cdp.eval(`document.body.innerText.includes('空数据导出回归验证') && Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === '拒绝')`), 30000)
+    await clickByText(mobile.cdp, 'button.secondary', '拒绝')
+    await waitFor('mobile sees missing evidence notice and disabled accept', () => mobile.cdp.eval(`
+      document.body.innerText.includes('当前版本缺少验收所需证据') &&
+      Array.from(document.querySelectorAll('button.primary')).some(b => b.textContent.includes('接受') && b.disabled)
+    `), 30000)
+
+    // 8. Desktop revokes Mobile in Settings -> Mobile automatically signs out to Bind screen
+    await desktop.cdp.eval(`location.hash = 'settings'`)
+    await waitFor('settings device list', () => desktop.cdp.eval(`document.body.innerText.includes('iPhone Viewport')`))
+    await desktop.cdp.eval(`(() => {
+      const items = Array.from(document.querySelectorAll('.settings-item'));
+      const row = items.find(el => el.textContent.includes('iPhone Viewport'));
+      const btn = row && Array.from(row.querySelectorAll('button')).find(b => b.textContent.trim() === '撤销');
+      if (!btn) throw new Error('Revoke button for iPhone Viewport not found');
+      btn.click();
+    })()`)
+    await waitFor('confirm revoke modal', () => desktop.cdp.eval(`Array.from(document.querySelectorAll('button.destructive')).some(b => b.textContent.includes('撤销访问'))`))
+    await clickByText(desktop.cdp, 'button.destructive', '撤销访问')
+    await waitFor('mobile returned to bind screen after revoke', () => mobile.cdp.eval(`document.body.innerText.includes('连接你的设备')`), 15000)
+
+    const out = { status: 'PASS', taskId, denyTaskId, origin: args.origin, layoutChecks }
     if (args.reportOut) {
       fs.mkdirSync(path.dirname(args.reportOut), { recursive: true })
       fs.writeFileSync(args.reportOut, JSON.stringify(out, null, 2) + '\n')
     }
     console.log(JSON.stringify(out, null, 2))
+  } catch (err) {
+    if (desktop) {
+      const dInfo = await desktop.cdp.eval(`({ href: location.href, text: document.body.innerText.slice(0, 600) })`).catch(e => String(e))
+      console.error('DESKTOP STATE ON ERROR:', dInfo)
+    }
+    if (mobile) {
+      const mInfo = await mobile.cdp.eval(`({ href: location.href, text: document.body.innerText.slice(0, 600) })`).catch(e => String(e))
+      console.error('MOBILE STATE ON ERROR:', mInfo)
+    }
+    throw err
   } finally {
     await stopChrome(mobile)
     await stopChrome(desktop)

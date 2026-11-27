@@ -106,35 +106,60 @@ export async function snapshot(signal?: AbortSignal) {
   }
   return out
 }
-export async function followEvents(stream: string, after: string, signal: AbortSignal, onReady: () => void, onEvent: (event: TimelineEvent) => void) {
-  const url = apiPath('events?' + new URLSearchParams({ streamId: stream, afterSeq: after }))
-  const response = await check(await fetch(url, { signal, headers: { 'Last-Event-ID': stream + ':' + after } }))
-  if (!response.body) throw new Error('事件流不可用')
-  onReady()
-  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader()
-  let buffer = ''
-  let position = BigInt(after)
+export async function followEvents(
+  stream: string,
+  after: string,
+  signal: AbortSignal,
+  onReady: () => void,
+  onEvent: (event: TimelineEvent) => void,
+  onActivity?: () => void,
+  staleAfterMs = 25_000,
+) {
+  const attempt = new AbortController()
+  const abortAttempt = () => attempt.abort(signal.reason)
+  if (signal.aborted) attempt.abort(signal.reason)
+  else signal.addEventListener('abort', abortAttempt, { once: true })
+  let idleTimer: number | undefined
+  const resetIdle = () => {
+    onActivity?.()
+    window.clearTimeout(idleTimer)
+    idleTimer = window.setTimeout(() => attempt.abort(new DOMException('SSE heartbeat timeout', 'TimeoutError')), staleAfterMs)
+  }
   try {
-    for (;;) {
-      const { value, done } = await reader.read()
-      if (done) break
-      buffer += value
-      let boundary = buffer.indexOf('\n\n')
-      while (boundary >= 0) {
-        const frame = buffer.slice(0, boundary)
-        buffer = buffer.slice(boundary + 2)
-        const data = frame.split('\n').find(line => line.startsWith('data: '))?.slice(6)
-        if (frame.includes('event: reset_required')) throw new APIError(410, 'cursor_expired', '事件位置已失效')
-        if (data) {
-          const event: TimelineEvent = JSON.parse(data)
-          const seq = BigInt(event.seq)
-          if (event.streamId !== stream || seq > position + 1n) throw new APIError(410, 'cursor_expired', '事件位置已失效')
-          if (seq > position) { position = seq; onEvent(event) }
+    const url = apiPath('events?' + new URLSearchParams({ streamId: stream, afterSeq: after }))
+    const response = await check(await fetch(url, { signal: attempt.signal, headers: { 'Last-Event-ID': stream + ':' + after } }))
+    if (!response.body) throw new Error('事件流不可用')
+    onReady()
+    resetIdle()
+    const reader = response.body.pipeThrough(new TextDecoderStream()).getReader()
+    let buffer = ''
+    let position = BigInt(after)
+    try {
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        resetIdle()
+        buffer += value
+        let boundary = buffer.indexOf('\n\n')
+        while (boundary >= 0) {
+          const frame = buffer.slice(0, boundary)
+          buffer = buffer.slice(boundary + 2)
+          const data = frame.split('\n').find(line => line.startsWith('data: '))?.slice(6)
+          if (frame.includes('event: reset_required')) throw new APIError(410, 'cursor_expired', '事件位置已失效')
+          if (data) {
+            const event: TimelineEvent = JSON.parse(data)
+            const seq = BigInt(event.seq)
+            if (event.streamId !== stream || seq > position + 1n) throw new APIError(410, 'cursor_expired', '事件位置已失效')
+            if (seq > position) { position = seq; onEvent(event) }
+          }
+          boundary = buffer.indexOf('\n\n')
         }
-        boundary = buffer.indexOf('\n\n')
       }
+    } finally {
+      await reader.cancel().catch(() => {})
     }
   } finally {
-    await reader.cancel().catch(() => {})
+    window.clearTimeout(idleTimer)
+    signal.removeEventListener('abort', abortAttempt)
   }
 }

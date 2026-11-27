@@ -51,6 +51,9 @@ function App() {
     let refreshWanted = 0
     let refreshApplied = 0
     let refreshTimer: number | undefined
+    let attemptController: AbortController | undefined
+    let wakeWait: (() => void) | undefined
+    let lastPacketAt = Date.now()
     const fail = (err: unknown) => {
       if (root.signal.aborted) return
       if (err instanceof APIError && err.status === 401) { setSession(null); setSnapshotData(undefined); return }
@@ -71,31 +74,85 @@ function App() {
       return refreshing
     }
     refreshData.current = refresh
+    const wait = (ms: number) => new Promise<void>(resolve => {
+      let timer: number | undefined
+      const done = () => {
+        window.clearTimeout(timer)
+        root.signal.removeEventListener('abort', done)
+        if (wakeWait === done) wakeWait = undefined
+        resolve()
+      }
+      wakeWait = done
+      root.signal.addEventListener('abort', done, { once: true })
+      if (ms >= 0) timer = window.setTimeout(done, ms)
+    })
+    const onOffline = () => {
+      setOnline(false)
+      attemptController?.abort(new DOMException('Network offline', 'AbortError'))
+    }
+    const onOnline = () => { wakeWait?.() }
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible' && Date.now() - lastPacketAt > 12_000) {
+        setOnline(false)
+        attemptController?.abort(new DOMException('Stale connection after backgrounding', 'AbortError'))
+        wakeWait?.()
+      }
+    }
+    window.addEventListener('offline', onOffline)
+    window.addEventListener('online', onOnline)
+    document.addEventListener('visibilitychange', onVisibility)
     void (async () => {
       while (!root.signal.aborted) {
+        if (!navigator.onLine) {
+          setOnline(false)
+          await wait(-1)
+          continue
+        }
+        attemptController = new AbortController()
+        const forwardAbort = () => attemptController?.abort(root.signal.reason)
+        root.signal.addEventListener('abort', forwardAbort, { once: true })
         try {
           await replay(session)
           if (!position) await refresh()
           if (!position || root.signal.aborted) return
-          await followEvents(position.streamId, position.highWater, root.signal, () => { setOnline(true); setError('') }, () => {
-            if (refreshTimer === undefined) refreshTimer = window.setTimeout(() => {
-              refreshTimer = undefined
-              void refresh().catch(fail)
-            }, 120)
-          })
+          await followEvents(
+            position.streamId,
+            position.highWater,
+            attemptController.signal,
+            () => { lastPacketAt = Date.now(); setOnline(true); setError('') },
+            () => {
+              if (refreshTimer === undefined) refreshTimer = window.setTimeout(() => {
+                refreshTimer = undefined
+                void refresh().catch(fail)
+              }, 120)
+            },
+            () => { lastPacketAt = Date.now() },
+          )
           if (root.signal.aborted) return
           const device = await get<Session>('session', root.signal)
           if (device.deviceId !== session.deviceId) return setSession(device)
         } catch (err) {
+          if (root.signal.aborted) return
+          const intentional = attemptController.signal.aborted && (!navigator.onLine || (err instanceof DOMException && err.name === 'AbortError'))
           if (err instanceof APIError && err.status === 410) position = undefined
-          else fail(err)
+          else if (!intentional) fail(err)
           if (err instanceof APIError && err.status === 401) return
+        } finally {
+          root.signal.removeEventListener('abort', forwardAbort)
+          attemptController = undefined
         }
         setOnline(false)
-        await new Promise(resolve => window.setTimeout(resolve, 1200))
+        if (!root.signal.aborted && navigator.onLine) await wait(1200)
       }
     })()
-    return () => { root.abort(); window.clearTimeout(refreshTimer); setOnline(false) }
+    return () => {
+      root.abort()
+      window.clearTimeout(refreshTimer)
+      window.removeEventListener('offline', onOffline)
+      window.removeEventListener('online', onOnline)
+      document.removeEventListener('visibilitychange', onVisibility)
+      setOnline(false)
+    }
   }, [session])
 
   const refresh = useCallback(async () => {

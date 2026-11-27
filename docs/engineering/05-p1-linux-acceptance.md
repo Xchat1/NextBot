@@ -39,6 +39,14 @@
 - **工具链**：Go 1.25+、GCC / libc6-dev（`mattn/go-sqlite3` CGO 编译）、Node.js 22.12+、Git、Python 3、SQLite CLI
 - **容器执行器**（二选一，必须为 rootless 模式）：
   - **Rootless Podman**（推荐）：`podman info --format '{{.Host.Security.Rootless}}'` 输出 `true`
+    - Ubuntu/Debian cgroup v2 主机启用资源限制（`--pids-limit`、`--memory`、`--cpus`）时，需安装 `dbus-user-session`、`uidmap`、`slirp4netns`，并确保运行 Runner 的系统账号开启 lingering 且存在 user systemd D-Bus session：
+      ```sh
+      sudo apt-get install -y podman dbus-user-session uidmap slirp4netns
+      sudo loginctl enable-linger "$USER"
+      sudo systemctl restart "user@$(id -u).service"
+      export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+      ```
+    - 若在全新安装或非交互 SSH 启动 Runner 前跳过上述步骤，Podman 可能报错 `rootless needs no limits + no cgrouppath when no permission is granted for cgroups`（退出码 `126`）。
   - **Rootless Docker**：`docker info --format '{{json .SecurityOptions}}'` 包含 `rootless`
 - **Codex CLI**：
   - 安装真实 `codex`（如 `@openai/codex`），并准备**独立的专用 `CODEX_HOME`**，不要复用包含个人 MCP Server 的 `~/.codex/config.toml`（避免加载本地自定义 `mcp_servers.*`）。

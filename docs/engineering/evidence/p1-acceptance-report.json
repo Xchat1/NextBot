@@ -1,0 +1,142 @@
+{
+  "startedAt": "2026-11-27T12:01:26.243783+00:00",
+  "cliMode": "harness",
+  "engine": "podman",
+  "stateDir": "/tmp/nextbot-p1-full",
+  "environment": {
+    "uname": "Linux colima-nextbot-p1 6.8.0-117-generic #117-Ubuntu SMP PREEMPT_DYNAMIC Thu May  7 17:26:37 UTC 2026 aarch64",
+    "python": "3.12.3",
+    "imageDigest": "docker.io/library/alpine@sha256:bc21487101ae47172509130ee1092cc273a831968d64b617776d1f69c81e42ab",
+    "codexVersion": "codex-cli 0.171.0-nextbot-harness",
+    "baseCommit": "0d505ab686f2449fe3f207d2d8a0f59f5d0d36d9",
+    "projectId": "622c5f0b3a79555f8a2a08fdfcb149df",
+    "nodeCapabilities": {
+      "claude": {
+        "installed": false,
+        "authenticated": false,
+        "version": "",
+        "execution": false,
+        "readOnlyReview": false,
+        "managedTests": false,
+        "cancel": false,
+        "questions": false,
+        "nativeResume": false,
+        "reason": "未安装 CLI"
+      },
+      "codex": {
+        "installed": true,
+        "authenticated": true,
+        "version": "codex-cli 0.171.0-nextbot-harness",
+        "execution": true,
+        "readOnlyReview": false,
+        "managedTests": true,
+        "cancel": true,
+        "questions": true,
+        "nativeResume": false
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "id": "S1_happy_delivery_and_restart_backup",
+      "cases": [
+        "A01",
+        "A05",
+        "A09",
+        "A11(allow_once)"
+      ],
+      "status": "PASS",
+      "cliUsed": "harness-codex",
+      "clientUsed": "automated-rest-sse (desktop+phone sessions)",
+      "taskId": "e02dc636d113c65bed1f0c25d8952932",
+      "attemptId": "10037fe3fac6c47a3949182d751dc995",
+      "artifactVersionId": "d3d9a7577b067b8ac1528bdbcd3c3e1f",
+      "versionNumber": 1,
+      "requestId": "316c581b8282cd09557808063f292c36",
+      "actualTestStarts": 1,
+      "acceptanceDeviceId": "adc54612d1cdad474772c9ac09a0bae6",
+      "backupVerifiedObjects": 5
+    },
+    {
+      "id": "S2_approval_deny",
+      "cases": [
+        "A11(deny)"
+      ],
+      "status": "PASS",
+      "cliUsed": "harness-codex",
+      "clientUsed": "automated-rest-sse",
+      "taskId": "4af7104168f97554eb068476e083d53c",
+      "attemptId": "5a731ff1d4881815aa8bd565881b0086",
+      "artifactVersionId": "b58be4d504c3df1cc1eeacd2426e2257",
+      "requestId": "db391ce2a36580f9595ef6d2e3527d96",
+      "actualTestStarts": 0,
+      "acceptWithoutEvidenceStatus": 422,
+      "acceptWithoutEvidenceCode": "evidence_missing"
+    },
+    {
+      "id": "S3_approval_expiry",
+      "cases": [
+        "A11(expired)"
+      ],
+      "status": "PASS",
+      "cliUsed": "harness-codex",
+      "clientUsed": "automated-rest-sse",
+      "taskId": "e7d0200d0ba9fccfbc6249155f303a0c",
+      "attemptId": "4728a22bbdb7919b2faefac2dcabe7ff",
+      "requestId": "c96b0497e0cf8a891751bd876b8db0bd",
+      "actualTestStarts": 0,
+      "lateDecideStatus": 409,
+      "lateDecideCode": "request_expired"
+    },
+    {
+      "id": "S4a_queue_idempotency_and_sse_replay",
+      "cases": [
+        "A06",
+        "A12(within_window)",
+        "A28(single_answer)"
+      ],
+      "status": "PASS",
+      "cliUsed": "harness-codex",
+      "clientUsed": "automated-rest-sse",
+      "taskId": "e8c7eac87d804488c80a7c10ac390b74",
+      "cancelledTaskId": "169864e2eba5c10403009fa097c9583f",
+      "offlineAfterSeq": "80",
+      "replayedSeqRange": [
+        81,
+        94
+      ],
+      "replayedCount": 14
+    },
+    {
+      "id": "S5_device_revocation",
+      "cases": [
+        "A02(revoke)"
+      ],
+      "status": "PASS",
+      "clientUsed": "automated-rest-sse",
+      "revokedDeviceId": "adc54612d1cdad474772c9ac09a0bae6",
+      "revokedAt": "2026-11-27T12:06:40.489498985Z",
+      "sseClosedOnRevoke": true,
+      "postRevokeStatuses": {
+        "session": 401,
+        "tasks": 401,
+        "mutate": 401,
+        "sse": 401
+      }
+    },
+    {
+      "id": "S4b_cursor_expired_snapshot_reload",
+      "cases": [
+        "A12(cursor_expired)"
+      ],
+      "status": "PASS",
+      "clientUsed": "automated-rest-sse",
+      "eventWindow": 5,
+      "expiredAfterSeq": "3",
+      "reconnectStatus": 410,
+      "reloadedHighWater": "10",
+      "resumedLiveEventTaskId": "c253ad93201f3f6f3d3a2006dcc25571"
+    }
+  ],
+  "finishedAt": "2026-11-27T12:06:44.127448+00:00"
+}
