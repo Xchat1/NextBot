@@ -41,7 +41,6 @@ type activeAttempt struct {
 	test      control.TestDefinition
 	options   control.Command
 	tools     map[string]chan toolResult
-	testLogs  []archiveEntry
 	unknown   bool
 	testDone  chan struct{}
 	answerAck chan error
@@ -144,7 +143,10 @@ func (r *Runner) reconcile(ctx context.Context) error {
 		return err
 	}
 	for _, p := range reports {
-		if err = r.send(ctx, p.Route, p.Report); err != nil && !transient(err) {
+		if err = r.send(ctx, p.Route, p.Report); err != nil {
+			if transient(err) {
+				return err
+			}
 			log.Printf("reconciliation report %s: %v", p.Report.ID, err)
 		}
 	}
@@ -158,6 +160,17 @@ func (r *Runner) reconcile(ctx context.Context) error {
 				return err
 			}
 			continue
+		}
+		if c.Type == "start_execution" {
+			recovered, err := r.recoverExecution(ctx, c)
+			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				log.Printf("recover execution evidence %s: %v", c.ID, err)
+			} else if recovered {
+				continue
+			}
 		}
 		if err = r.receipt(ctx, c, "unknown", "runner restarted before result could be verified", nil); err != nil {
 			return err
@@ -358,7 +371,6 @@ func (r *Runner) start(ctx context.Context, c control.Command) error {
 	r.mu.Lock()
 	unknown := a.unknown || !stopped
 	a.unknown = unknown
-	logs := append([]archiveEntry{}, a.testLogs...)
 	r.mu.Unlock()
 	if !stopped || unknown {
 		return r.unknown(ctx, c, "进程或受管动作的停止结果待核对")
@@ -366,28 +378,29 @@ func (r *Runner) start(ctx context.Context, c control.Command) error {
 	if !started && a.ctx.Err() == nil && runErr != nil {
 		return r.receipt(ctx, c, "rejected", runErr.Error(), nil)
 	}
-	outcome := "succeeded"
-	reason := ""
+	logs, err := r.j.testEvidence(c.AttemptID)
+	if err != nil {
+		return err
+	}
+	saved := executionArchive{Base: task.Base, Outcome: "succeeded", ReportID: control.ID()}
 	if runErr != nil {
-		outcome = "interrupted"
-		reason = runErr.Error()
+		saved.Outcome = "interrupted"
+		saved.Reason = runErr.Error()
 	}
 	patch, hash, diffErr := w.diff(ctx, r.cfg.Dir)
-	archiveID := ""
 	if diffErr != nil {
-		outcome = "interrupted"
-		reason = diffErr.Error()
-	} else {
-		archiveID, err = r.archive(ctx, a, c, patch, hash, summary, logs)
-		if err != nil {
-			if ctx.Err() != nil {
-				return err
-			}
-			outcome = "interrupted"
-			reason = "归档未完成：" + err.Error()
+		saved.Outcome = "interrupted"
+		saved.Reason = diffErr.Error()
+		if len(logs) > 0 {
+			saved.Entries = recoveredTestEntries(logs)
 		}
+	} else {
+		saved.Entries = executionEntries(patch, hash, summary, logs)
 	}
-	return r.report(ctx, c, "execution_finished", map[string]any{"outcome": outcome, "reason": reason, "stopped": true, "artifactVersionId": archiveID})
+	if err := r.j.saveArchive(c.ID, saved); err != nil {
+		return err
+	}
+	return r.publishExecution(ctx, c, saved)
 }
 func (r *Runner) cancel(ctx context.Context, c control.Command) error {
 	startID := str(c.Payload, "startCommandId")

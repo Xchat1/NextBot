@@ -32,6 +32,9 @@ PRAGMA synchronous=FULL;
 CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, phase TEXT NOT NULL, body BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS processes (command TEXT PRIMARY KEY, pid INTEGER NOT NULL, boot TEXT NOT NULL, birth TEXT NOT NULL, observed TEXT NOT NULL, stopped TEXT);
 CREATE TABLE IF NOT EXISTS outbox (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, body BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS test_evidence (command TEXT PRIMARY KEY, attempt TEXT NOT NULL, body BLOB NOT NULL);
+CREATE INDEX IF NOT EXISTS test_evidence_attempt ON test_evidence(attempt,command);
+CREATE TABLE IF NOT EXISTS execution_archives (command TEXT PRIMARY KEY, body BLOB NOT NULL);
 `)
 	if err != nil {
 		db.Close()
@@ -73,8 +76,8 @@ func (j *journal) pending() ([]pending, error) {
 func (j *journal) unfinished() ([]control.Command, error) {
 	return readRows[control.Command](j.db, "SELECT body FROM jobs WHERE phase='intent' ORDER BY rowid")
 }
-func readRows[T any](db *sql.DB, query string) ([]T, error) {
-	rows, err := db.Query(query)
+func readRows[T any](db *sql.DB, query string, args ...any) ([]T, error) {
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -92,6 +95,87 @@ func readRows[T any](db *sql.DB, query string) ([]T, error) {
 		out = append(out, value)
 	}
 	return out, rows.Err()
+}
+
+func (j *journal) finishTest(c control.Command, report control.Report, entries []archiveEntry) error {
+	encodedEntries, err := json.Marshal(entries)
+	if err != nil {
+		return err
+	}
+	receipt, err := json.Marshal(pending{"receipts", report})
+	if err != nil {
+		return err
+	}
+	tx, err := j.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec("UPDATE processes SET stopped=? WHERE command=?", time.Now().UTC().Format(time.RFC3339Nano), c.ID); err != nil {
+		return err
+	}
+	if len(entries) > 0 {
+		if _, err = tx.Exec("INSERT INTO test_evidence VALUES(?,?,?)", c.ID, c.AttemptID, encodedEntries); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.Exec("INSERT INTO outbox(id,body) VALUES(?,?)", report.ID, receipt); err != nil {
+		return err
+	}
+	if _, err = tx.Exec("UPDATE jobs SET phase='settled' WHERE id=?", c.ID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (j *journal) testEvidence(attemptID string) ([]archiveEntry, error) {
+	tests, err := readRows[[]archiveEntry](j.db, "SELECT body FROM test_evidence WHERE attempt=? ORDER BY command", attemptID)
+	var entries []archiveEntry
+	for _, test := range tests {
+		entries = append(entries, test...)
+	}
+	return entries, err
+}
+
+func (j *journal) saveArchive(commandID string, archive executionArchive) error {
+	body, err := json.Marshal(archive)
+	if err != nil {
+		return err
+	}
+	_, err = j.db.Exec("INSERT INTO execution_archives VALUES(?,?)", commandID, body)
+	return err
+}
+
+func (j *journal) executionArchive(commandID string) (*executionArchive, error) {
+	var body []byte
+	err := j.db.QueryRow("SELECT body FROM execution_archives WHERE command=?", commandID).Scan(&body)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var archive executionArchive
+	err = json.Unmarshal(body, &archive)
+	return &archive, err
+}
+
+func (j *journal) completeArchive(c control.Command) error {
+	tx, err := j.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec("UPDATE jobs SET phase='settled' WHERE id=?", c.ID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec("DELETE FROM execution_archives WHERE command=?", c.ID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec("DELETE FROM test_evidence WHERE attempt=?", c.AttemptID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (j *journal) process(c control.Command, pid int) error {

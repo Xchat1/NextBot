@@ -294,6 +294,13 @@ func TestOwnerWorkflow(t *testing.T) {
 		data, err := server.finishUpload(tx, obj["uploadId"].(string), input{"attemptId": start.AttemptID, "manifestDigest": obj["manifestDigest"]})
 		if err == nil {
 			art = data.data.(Artifact)
+			replayed, replayErr := server.finishUpload(tx, obj["uploadId"].(string), input{"attemptId": start.AttemptID, "manifestDigest": obj["manifestDigest"]})
+			if replayErr != nil {
+				return replayErr
+			}
+			if replayed.data.(Artifact).ID != art.ID {
+				t.Fatal("replay published another artifact version")
+			}
 		}
 		return err
 	})
@@ -396,5 +403,36 @@ func TestArchiveRejectsCorruptBytes(t *testing.T) {
 	var a *apiError
 	if !errors.As(err, &a) || a.Code != "digest_mismatch" {
 		t.Fatalf("expected digest mismatch, got %v", err)
+	}
+}
+
+func TestDispatchDoesNotApplyEvidenceOnlyArchiveAsPatch(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.DB.Close()
+	server := &Server{Store: s}
+	project, err := s.AddProject("Fixture", "/fixture", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactID := ID()
+	task := Task{ID: ID(), ProjectID: project.ID, State: "queued", Agent: "codex", ArtifactID: &artifactID}
+	node := Node{ID: "local"}
+	logs := []byte("recovered test output")
+	entry := Entry{ID: "test.txt", SHA: Hash(logs), Size: int64(len(logs)), MediaType: "text/plain; charset=utf-8", Kind: "execution_log"}
+	if err = writeObject(s.object(""), entry, bytes.NewReader(logs)); err != nil {
+		t.Fatal(err)
+	}
+	transact(t, s, func(tx *transaction) error {
+		if err := put(tx, "artifact", artifactID, task.ID, Artifact{ID: artifactID, TaskID: task.ID, Entries: []Entry{entry}}); err != nil {
+			return err
+		}
+		return server.dispatch(tx, &task, node, "execution")
+	})
+	start := claim(t, server, node, "start_execution")
+	if _, exists := start.Payload["previousArtifact"]; exists {
+		t.Fatal("evidence-only archive must not be applied as a patch")
 	}
 }
